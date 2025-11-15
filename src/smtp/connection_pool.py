@@ -250,11 +250,16 @@ class SMTPConnectionPool:
                 logger.debug(f"[Pool] STARTTLS completed for {account_email}")
 
             # Authenticate with XOAUTH2
-            # aiosmtplib expects base64-encoded string for auth
+            # XOAUTH2 sends: AUTH XOAUTH2 <base64_xoauth2_string>
             import base64
             xoauth2_b64 = base64.b64encode(xoauth2_string.encode('utf-8')).decode('ascii')
 
-            await smtp.auth('XOAUTH2', xoauth2_b64)
+            # Use execute_command for XOAUTH2 authentication
+            response = await smtp.execute_command(b"AUTH", b"XOAUTH2", xoauth2_b64.encode())
+
+            if response.code != 235:
+                raise Exception(f"XOAUTH2 authentication failed: {response.code} {response.message}")
+
             logger.info(f"[Pool] Authenticated {account_email} with XOAUTH2")
 
             return smtp
