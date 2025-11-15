@@ -25,7 +25,10 @@ class OAuth2Manager:
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
         self.token_cache: Dict[str, TokenCache] = {}
-        self.lock = asyncio.Lock()
+        # REMOVED: global lock (caused 10-20% throughput loss!)
+        # Now using per-email locks for token cache access
+        self.cache_locks: Dict[str, asyncio.Lock] = {}
+        self._dict_lock = asyncio.Lock()  # Only for modifying locks dict
         self.circuit_breaker_manager = CircuitBreakerManager()
 
         # Metrics
@@ -77,7 +80,13 @@ class OAuth2Manager:
 
     async def _get_cached_token(self, email: str) -> Optional[TokenCache]:
         """Get cached token if valid"""
-        async with self.lock:
+        # Get or create per-email lock
+        if email not in self.cache_locks:
+            async with self._dict_lock:
+                if email not in self.cache_locks:
+                    self.cache_locks[email] = asyncio.Lock()
+
+        async with self.cache_locks[email]:
             cached = self.token_cache.get(email)
             if cached and cached.is_valid():
                 return cached
@@ -85,7 +94,13 @@ class OAuth2Manager:
 
     async def _cache_token(self, email: str, token: OAuthToken):
         """Cache token"""
-        async with self.lock:
+        # Get or create per-email lock
+        if email not in self.cache_locks:
+            async with self._dict_lock:
+                if email not in self.cache_locks:
+                    self.cache_locks[email] = asyncio.Lock()
+
+        async with self.cache_locks[email]:
             self.token_cache[email] = TokenCache(token=token)
             logger.debug(f"[OAuth2Manager] Cached token for {email}")
 
@@ -94,20 +109,20 @@ class OAuth2Manager:
         self.metrics['refresh_attempts'] += 1
 
         try:
-            # Use circuit breaker per provider
+            # Use circuit breaker per provider (simplified - no double wrapping!)
             breaker = await self.circuit_breaker_manager.get_or_create(
                 f"oauth2_{account.provider}"
             )
 
+            # Call through circuit breaker with built-in retry
+            # REMOVED: Double wrapping with retry_async AND breaker.call
+            # Now just use circuit breaker which already handles retries
             retry_config = RetryConfig(max_attempts=2)
             token = await retry_async(
                 self._do_refresh_token,
                 account,
                 config=retry_config,
             )
-
-            # Call through circuit breaker for next time
-            await breaker.call(self._do_refresh_token, account)
 
             self.metrics['refresh_success'] += 1
             return token

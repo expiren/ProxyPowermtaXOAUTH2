@@ -1,82 +1,75 @@
-"""HTTP metrics server for Prometheus"""
+"""Async HTTP metrics server for Prometheus"""
 
 import asyncio
 import logging
 import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from aiohttp import web
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 logger = logging.getLogger('xoauth2_proxy')
 
 
-class MetricsHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for metrics"""
-
-    def do_GET(self):
-        """Handle GET request"""
-        if self.path == '/metrics':
-            # Return Prometheus metrics
-            metrics_data = generate_latest()
-            self.send_response(200)
-            self.send_header('Content-type', CONTENT_TYPE_LATEST)
-            self.send_header('Content-Length', len(metrics_data))
-            self.end_headers()
-            self.wfile.write(metrics_data)
-
-        elif self.path == '/health':
-            # Return health status
-            health = {'status': 'healthy'}
-            health_json = json.dumps(health).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Content-Length', len(health_json))
-            self.end_headers()
-            self.wfile.write(health_json)
-
-        elif self.path == '/':
-            # Welcome message
-            welcome = b'XOAUTH2 Proxy Metrics Server\n\nEndpoints:\n- /metrics (Prometheus metrics)\n- /health (Health check)\n'
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.send_header('Content-Length', len(welcome))
-            self.end_headers()
-            self.wfile.write(welcome)
-
-        else:
-            self.send_response(404)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'Not found')
-
-    def log_message(self, format, *args):
-        """Override to use logger instead of print"""
-        logger.debug(f"[MetricsServer] {format % args}")
-
-
 class MetricsServer:
-    """HTTP server for Prometheus metrics"""
+    """Async HTTP server for Prometheus metrics (fully async, no thread pool!)"""
 
     def __init__(self, host: str = '0.0.0.0', port: int = 9090):
         self.host = host
         self.port = port
-        self.server = None
+        self.app = None
+        self.runner = None
+        self.site = None
 
     async def start(self):
-        """Start metrics server"""
-        loop = asyncio.get_running_loop()
+        """Start metrics server (fully async)"""
+        # Create aiohttp application
+        self.app = web.Application()
 
-        # Create HTTP server
-        self.server = HTTPServer((self.host, self.port), MetricsHandler)
+        # Add routes
+        self.app.router.add_get('/metrics', self._handle_metrics)
+        self.app.router.add_get('/health', self._handle_health)
+        self.app.router.add_get('/', self._handle_root)
 
-        # Run server in thread pool
-        await loop.run_in_executor(None, self.server.serve_forever)
+        # Create runner (allows manual lifecycle control)
+        self.runner = web.AppRunner(self.app, access_log=None)
+        await self.runner.setup()
+
+        # Create site (binds to host:port)
+        self.site = web.TCPSite(self.runner, self.host, self.port)
+        await self.site.start()
+
+        logger.info(f"[MetricsServer] Started on http://{self.host}:{self.port}")
 
     async def stop(self):
-        """Stop metrics server"""
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
-            logger.info("[MetricsServer] Stopped")
+        """Stop metrics server (fully async)"""
+        if self.site:
+            await self.site.stop()
+        if self.runner:
+            await self.runner.cleanup()
+        logger.info("[MetricsServer] Stopped")
+
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """Handle /metrics endpoint"""
+        # Generate Prometheus metrics (CPU-bound but fast <10ms)
+        metrics_data = generate_latest()
+        return web.Response(
+            body=metrics_data,
+            content_type=CONTENT_TYPE_LATEST
+        )
+
+    async def _handle_health(self, request: web.Request) -> web.Response:
+        """Handle /health endpoint"""
+        health = {'status': 'healthy'}
+        return web.json_response(health)
+
+    async def _handle_root(self, request: web.Request) -> web.Response:
+        """Handle / endpoint"""
+        welcome = (
+            'XOAUTH2 Proxy Metrics Server\n\n'
+            'Endpoints:\n'
+            '- /metrics (Prometheus metrics)\n'
+            '- /health (Health check)\n'
+        )
+        return web.Response(text=welcome, content_type='text/plain')
 
     def __str__(self) -> str:
         """String representation"""

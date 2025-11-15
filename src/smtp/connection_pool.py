@@ -306,7 +306,7 @@ class SMTPConnectionPool:
             logger.debug(f"[Pool] Error closing connection for {pooled.account_email}: {e}")
 
     async def cleanup_idle_connections(self):
-        """Background task to cleanup idle connections"""
+        """Background task to cleanup idle connections (parallelized per account)"""
         while True:
             try:
                 await asyncio.sleep(30)  # Run every 30 seconds
@@ -314,37 +314,50 @@ class SMTPConnectionPool:
                 # Get snapshot of accounts (no lock needed for list() on dict.keys())
                 accounts = list(self.pools.keys())
 
-                for account_email in accounts:
-                    if account_email not in self.locks:
-                        continue
+                # Cleanup all accounts in parallel (huge speedup!)
+                cleanup_tasks = [
+                    self._cleanup_account(account_email)
+                    for account_email in accounts
+                    if account_email in self.locks
+                ]
 
-                    lock = self.locks[account_email]
-                    async with lock:
-                        pool = self.pools[account_email]
-                        to_remove = []
-
-                        for pooled in pool:
-                            if pooled.is_busy:
-                                continue
-
-                            if (pooled.is_expired(self.connection_max_age) or
-                                pooled.is_idle_too_long(self.connection_idle_timeout)):
-                                to_remove.append(pooled)
-
-                        # Close connections before filtering
-                        for pooled in to_remove:
-                            await self._close_connection(pooled)
-
-                        # Filter deque in one pass (more efficient than multiple remove() calls)
-                        if to_remove:
-                            self.pools[account_email] = deque(p for p in pool if p not in to_remove)
-                            logger.info(
-                                f"[Pool] Cleaned up {len(to_remove)} idle connections "
-                                f"for {account_email}"
-                            )
+                if cleanup_tasks:
+                    # Wait for all cleanups to complete concurrently
+                    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
             except Exception as e:
                 logger.error(f"[Pool] Error in cleanup task: {e}")
+
+    async def _cleanup_account(self, account_email: str):
+        """Cleanup connections for a single account (called in parallel)"""
+        try:
+            lock = self.locks[account_email]
+            async with lock:
+                pool = self.pools[account_email]
+                to_remove = []
+
+                for pooled in pool:
+                    if pooled.is_busy:
+                        continue
+
+                    if (pooled.is_expired(self.connection_max_age) or
+                        pooled.is_idle_too_long(self.connection_idle_timeout)):
+                        to_remove.append(pooled)
+
+                # Close connections before filtering
+                for pooled in to_remove:
+                    await self._close_connection(pooled)
+
+                # Filter deque in one pass (more efficient than multiple remove() calls)
+                if to_remove:
+                    self.pools[account_email] = deque(p for p in pool if p not in to_remove)
+                    logger.info(
+                        f"[Pool] Cleaned up {len(to_remove)} idle connections "
+                        f"for {account_email}"
+                    )
+
+        except Exception as e:
+            logger.error(f"[Pool] Error cleaning up {account_email}: {e}")
 
     async def close_all(self):
         """Close all pooled connections"""

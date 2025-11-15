@@ -39,7 +39,7 @@ class AccountManager:
 
     async def get_by_email(self, email: str) -> Optional[AccountConfig]:
         """
-        Get account by email (cached)
+        Get account by email (cached, race-condition safe)
 
         Args:
             email: Email address
@@ -47,15 +47,22 @@ class AccountManager:
         Returns:
             AccountConfig or None if not found
         """
-        # Try cache first (fast path)
-        if email in self.email_cache:
-            return self.email_cache[email]
+        # Try cache first (fast path - no lock for read)
+        cached = self.email_cache.get(email)
+        if cached is not None:
+            return cached
 
-        # Try main store
+        # Cache miss - try main store with lock
         async with self.lock:
+            # Double-check cache after acquiring lock (another thread may have populated it)
+            if email in self.email_cache:
+                return self.email_cache[email]
+
+            # Check main store
             if email in self.accounts:
-                self.email_cache[email] = self.accounts[email]
-                return self.accounts[email]
+                account = self.accounts[email]
+                self.email_cache[email] = account
+                return account
 
         return None
 
