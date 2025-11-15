@@ -249,6 +249,10 @@ class SMTPConnectionPool:
                 await smtp.starttls()
                 logger.debug(f"[Pool] STARTTLS completed for {account_email}")
 
+                # Send EHLO again after STARTTLS (required by RFC)
+                await smtp.ehlo()
+                logger.debug(f"[Pool] EHLO sent after STARTTLS for {account_email}")
+
             # Authenticate with XOAUTH2
             # XOAUTH2 sends: AUTH XOAUTH2 <base64_xoauth2_string>
             import base64
