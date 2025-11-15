@@ -41,6 +41,9 @@ class SMTPProxyServer:
         # Initialize OAuth2 manager
         await self.oauth_manager.initialize()
 
+        # Initialize upstream relay with connection pool
+        await self.upstream_relay.initialize()
+
         logger.info(
             f"[SMTPProxyServer] Initialized with {num_accounts} accounts, "
             f"metrics on port {self.settings.metrics_port}"
@@ -104,6 +107,7 @@ class SMTPProxyServer:
             await self.server.wait_closed()
 
         await self.metrics_server.stop()
+        await self.upstream_relay.shutdown()
         await self.oauth_manager.cleanup()
 
         logger.info("[SMTPProxyServer] Shutdown complete")
