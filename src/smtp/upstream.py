@@ -147,8 +147,8 @@ class UpstreamRelay:
 
                 # Success
                 duration = time.time() - start_time
-                Metrics.messages_total.labels(account=account.email, result='success').inc()
-                Metrics.messages_duration_seconds.labels(account=account.email).observe(duration)
+                Metrics.messages_total.labels(result='success').inc()
+                Metrics.messages_duration_seconds.observe(duration)
 
                 logger.info(
                     f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipients "
@@ -162,8 +162,8 @@ class UpstreamRelay:
 
                 duration = time.time() - start_time
                 logger.error(f"[{account.email}] SMTP timeout")
-                Metrics.messages_total.labels(account=account.email, result='failure').inc()
-                Metrics.messages_duration_seconds.labels(account=account.email).observe(duration)
+                Metrics.messages_total.labels(result='failure').inc()
+                Metrics.messages_duration_seconds.observe(duration)
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
@@ -172,8 +172,8 @@ class UpstreamRelay:
 
                 duration = time.time() - start_time
                 logger.error(f"[{account.email}] SMTP send error: {e}")
-                Metrics.messages_total.labels(account=account.email, result='failure').inc()
-                Metrics.messages_duration_seconds.labels(account=account.email).observe(duration)
+                Metrics.messages_total.labels(result='failure').inc()
+                Metrics.messages_duration_seconds.observe(duration)
 
                 # Parse error for better response
                 error_str = str(e).lower()
@@ -189,9 +189,9 @@ class UpstreamRelay:
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
-            Metrics.messages_total.labels(account=account.email, result='failure').inc()
-            Metrics.errors_total.labels(account=account.email, error_type='relay').inc()
-            Metrics.messages_duration_seconds.labels(account=account.email).observe(duration)
+            Metrics.messages_total.labels(result='failure').inc()
+            Metrics.errors_total.labels(error_type='relay').inc()
+            Metrics.messages_duration_seconds.observe(duration)
             return (False, 450, "4.4.2 Internal error")
 
     async def shutdown(self):

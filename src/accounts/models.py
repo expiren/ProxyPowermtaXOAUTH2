@@ -30,6 +30,7 @@ class AccountConfig:
     token: Optional['OAuthToken'] = None
     messages_this_hour: int = field(default=0)
     concurrent_messages: int = field(default=0)
+    active_connections: int = field(default=0)  # Track active authenticated connections
     # IMPROVED: Lock created in __post_init__ for durability (not default_factory)
     lock: Optional[asyncio.Lock] = field(default=None, init=False, repr=False)
 

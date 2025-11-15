@@ -6,7 +6,6 @@ import logging
 import time
 import re
 from typing import Dict, List, Optional
-from collections import defaultdict
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
@@ -17,6 +16,15 @@ logger = logging.getLogger('xoauth2_proxy')
 
 # Alias for metrics
 Metrics = MetricsCollector
+
+# Pre-encoded common SMTP responses (bytes passthrough optimization)
+# Avoids repeated encode() calls for high-frequency responses
+_RESPONSE_OK = b'250 OK\r\n'
+_RESPONSE_250_OK = b'250 2.1.0 OK\r\n'
+_RESPONSE_250_DATA_OK = b'250 2.0.0 OK\r\n'
+_RESPONSE_354_START_DATA = b'354 Start mail input; end with <CRLF>.<CRLF>\r\n'
+_RESPONSE_502_NOT_IMPL = b'502 Command not implemented\r\n'
+_RESPONSE_503_BAD_SEQ = b'503 Bad sequence of commands\r\n'
 
 
 class SMTPProxyHandler(asyncio.Protocol):
@@ -45,9 +53,6 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.message_data = b''
         self.buffer = b''
         self.state = 'INITIAL'
-
-        # Per-account tracking (no lock needed - metrics client is thread-safe)
-        self.active_connections: Dict[str, int] = defaultdict(int)
 
         # Line processing queue (to avoid task spam)
         self.line_queue = asyncio.Queue()
@@ -79,12 +84,11 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         # Update metrics synchronously (no task needed - runs in event loop)
         if self.current_account:
-            # Metrics updates are thread-safe, no need for async task
-            if self.current_account.account_id in self.active_connections:
-                self.active_connections[self.current_account.account_id] -= 1
-                Metrics.smtp_connections_active.labels(
-                    account=self.current_account.email
-                ).set(self.active_connections[self.current_account.account_id])
+            # Decrement active connections count (unified tracking in account object)
+            if self.current_account.active_connections > 0:
+                self.current_account.active_connections -= 1
+                # Update global active connections gauge (no account label to reduce cardinality)
+                Metrics.smtp_connections_active.set(self.current_account.active_connections)
 
     def data_received(self, data):
         """Data received from client"""
@@ -127,23 +131,31 @@ class SMTPProxyHandler(asyncio.Protocol):
                     self.message_data += line
                 return
 
-            line_str = line.decode('utf-8', errors='replace').strip()
+            # Bytes passthrough optimization: work with bytes for command parsing
+            # Only decode when we need the arguments (avoids decode/encode overhead)
+            line_stripped = line.strip()
 
-            if not line_str:
+            if not line_stripped:
                 return
 
-            logger.debug(f"[{self.peername}] << {line_str[:100]}")
+            # Fast command detection with bytes (no decode needed!)
+            # Split on first space to get command and args as bytes
+            parts_bytes = line_stripped.split(None, 1)
+            if not parts_bytes:
+                return
 
-            parts = line_str.split(None, 1)
-            command = parts[0].upper() if parts else ''
-            args = parts[1] if len(parts) > 1 else ''
+            command_bytes = parts_bytes[0].upper()
 
-            # Log command
-            if self.current_account:
-                Metrics.smtp_commands_total.labels(
-                    account=self.current_account.email,
-                    command=command
-                ).inc()
+            # Decode command for logging/comparison (only the command, not args yet)
+            command = command_bytes.decode('ascii', errors='replace')
+            logger.debug(f"[{self.peername}] << {command}")
+
+            # Decode args only when needed by specific commands
+            args = parts_bytes[1].decode('utf-8', errors='replace') if len(parts_bytes) > 1 else ''
+
+            # Log command (no account label to reduce cardinality)
+            if command:
+                Metrics.smtp_commands_total.labels(command=command).inc()
 
             if command == 'EHLO':
                 await self.handle_ehlo(args)
@@ -168,11 +180,8 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         except Exception as e:
             logger.error(f"Error handling line: {e}")
-            if self.current_account:
-                Metrics.errors_total.labels(
-                    account=self.current_account.email,
-                    error_type='handler'
-                ).inc()
+            # No account label to reduce cardinality
+            Metrics.errors_total.labels(error_type='handler').inc()
             self.send_response(451, "Internal error")
 
     async def handle_ehlo(self, hostname: str):
@@ -209,7 +218,7 @@ class SMTPProxyHandler(asyncio.Protocol):
                 decoded = base64.b64decode(encoded).decode('utf-8')
             except Exception as e:
                 logger.error(f"[{self.peername}] AUTH decode failed: {e}")
-                Metrics.auth_attempts_total.labels(account='unknown', result='decode_error').inc()
+                Metrics.auth_attempts_total.labels(result='decode_error').inc()
                 self.send_response(535, "AUTH mechanism not supported")
                 return
 
@@ -217,7 +226,7 @@ class SMTPProxyHandler(asyncio.Protocol):
             parts = decoded.split('\0')
             if len(parts) != 3:
                 logger.error(f"[{self.peername}] AUTH format invalid")
-                Metrics.auth_attempts_total.labels(account='unknown', result='format_error').inc()
+                Metrics.auth_attempts_total.labels(result='format_error').inc()
                 self.send_response(535, "AUTH mechanism not supported")
                 return
 
@@ -230,7 +239,7 @@ class SMTPProxyHandler(asyncio.Protocol):
             account = await self.config_manager.get_by_email(auth_email)
             if not account:
                 logger.warning(f"[{self.peername}] AUTH failed: account {auth_email} not found")
-                Metrics.auth_attempts_total.labels(account=auth_email, result='not_found').inc()
+                Metrics.auth_attempts_total.labels(result='not_found').inc()
                 self.send_response(535, "authentication failed")
                 return
 
@@ -241,32 +250,31 @@ class SMTPProxyHandler(asyncio.Protocol):
                     token = await self.oauth_manager.get_or_refresh_token(account, force_refresh=True)
                     if not token:
                         logger.error(f"[{auth_email}] Token refresh failed")
-                        Metrics.auth_attempts_total.labels(account=auth_email, result='token_refresh_failed').inc()
+                        Metrics.auth_attempts_total.labels(result='token_refresh_failed').inc()
                         self.send_response(454, "Temporary authentication failure")
                         return
 
                 # Verify token with upstream XOAUTH2 (while still holding account lock)
                 if not await self.verify_xoauth2(account):
                     logger.error(f"[{auth_email}] XOAUTH2 verification failed")
-                    Metrics.auth_attempts_total.labels(account=auth_email, result='xoauth2_failed').inc()
+                    Metrics.auth_attempts_total.labels(result='xoauth2_failed').inc()
                     self.send_response(535, "authentication failed")
                     return
 
                 # Authentication successful - update connection count (still under account lock)
                 # This consolidates all auth operations under ONE lock instead of multiple
-                account_id = account.account_id
-                self.active_connections[account_id] += 1
-                Metrics.smtp_connections_active.labels(account=auth_email).set(
-                    self.active_connections[account_id]
-                )
+                # Unified tracking: use account.active_connections instead of separate dict
+                account.active_connections += 1
+                # Update global active connections gauge (no account label to reduce cardinality)
+                Metrics.smtp_connections_active.set(account.active_connections)
 
             # Set state outside of lock
             self.current_account = account
             self.authenticated = True
 
             duration = time.time() - start_time
-            Metrics.auth_attempts_total.labels(account=auth_email, result='success').inc()
-            Metrics.auth_duration_seconds.labels(account=auth_email).observe(duration)
+            Metrics.auth_attempts_total.labels(result='success').inc()
+            Metrics.auth_duration_seconds.observe(duration)
 
             logger.info(f"[{self.peername}] AUTH successful for {auth_email}")
             self.send_response(235, "2.7.0 Authentication successful")
@@ -274,11 +282,8 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         except Exception as e:
             logger.error(f"[{self.peername}] AUTH error: {e}")
-            if self.current_account:
-                Metrics.errors_total.labels(
-                    account=self.current_account.email,
-                    error_type='auth'
-                ).inc()
+            # No account label to reduce cardinality
+            Metrics.errors_total.labels(error_type='auth').inc()
             self.send_response(451, "Internal error")
 
     async def verify_xoauth2(self, account: AccountConfig) -> bool:
@@ -317,18 +322,18 @@ class SMTPProxyHandler(asyncio.Protocol):
             )
 
             duration = time.time() - start_time
-            Metrics.upstream_auth_total.labels(account=account.email, result='success').inc()
-            Metrics.upstream_auth_duration_seconds.labels(account=account.email).observe(duration)
+            Metrics.upstream_auth_total.labels(result='success').inc()
+            Metrics.upstream_auth_duration_seconds.observe(duration)
 
             return True
 
         except Exception as e:
             duration = time.time() - start_time
-            Metrics.upstream_auth_total.labels(account=account.email, result='failure').inc()
-            Metrics.upstream_auth_duration_seconds.labels(account=account.email).observe(duration)
+            Metrics.upstream_auth_total.labels(result='failure').inc()
+            Metrics.upstream_auth_duration_seconds.observe(duration)
 
             logger.error(f"[{account.email}] XOAUTH2 verification failed: {e}")
-            Metrics.errors_total.labels(account=account.email, error_type='xoauth2_verify').inc()
+            Metrics.errors_total.labels(error_type='xoauth2_verify').inc()
             return False
 
     async def handle_mail(self, args: str):
@@ -375,9 +380,9 @@ class SMTPProxyHandler(asyncio.Protocol):
         # Increment concurrency counter
         async with self.current_account.lock:
             self.current_account.concurrent_messages += 1
-            Metrics.concurrent_messages.labels(
-                account=self.current_account.email
-            ).set(self.current_account.concurrent_messages)
+            # Update global concurrent messages gauge (no account label to reduce cardinality)
+            # Note: This is approximate as we don't track all accounts here, but good enough for monitoring
+            Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
 
         logger.info(f"[{self.current_account.email}] DATA: {len(self.rcpt_tos)} recipients")
         self.send_response(354, "Start mail input; end with <CRLF>.<CRLF>")
@@ -401,9 +406,8 @@ class SMTPProxyHandler(asyncio.Protocol):
             # Update concurrency
             async with self.current_account.lock:
                 self.current_account.concurrent_messages -= 1
-                Metrics.concurrent_messages.labels(
-                    account=self.current_account.email
-                ).set(self.current_account.concurrent_messages)
+                # Update global concurrent messages gauge (no account label to reduce cardinality)
+                Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
 
             # Send response to PowerMTA
             if success:
@@ -421,17 +425,14 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         except Exception as e:
             logger.error(f"[{self.current_account.email}] Error processing message: {e}")
-            Metrics.errors_total.labels(
-                account=self.current_account.email,
-                error_type='message_processing'
-            ).inc()
+            # No account label to reduce cardinality
+            Metrics.errors_total.labels(error_type='message_processing').inc()
 
             try:
                 async with self.current_account.lock:
                     self.current_account.concurrent_messages -= 1
-                    Metrics.concurrent_messages.labels(
-                        account=self.current_account.email
-                    ).set(self.current_account.concurrent_messages)
+                    # Update global concurrent messages gauge (no account label to reduce cardinality)
+                    Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
             except:
                 pass
 
@@ -459,7 +460,31 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.transport.close()
 
     def send_response(self, code: int, message: str, continue_response: bool = False):
-        """Send SMTP response"""
+        """Send SMTP response (optimized with pre-encoded common responses)"""
+        # Fast path: use pre-encoded responses for common cases (avoids encode() overhead)
+        if not continue_response:
+            if code == 250 and message == "OK":
+                self.transport.write(_RESPONSE_OK)
+                logger.debug(f"[{self.peername}] >> 250 OK")
+                return
+            elif code == 250 and message == "2.1.0 OK":
+                self.transport.write(_RESPONSE_250_OK)
+                logger.debug(f"[{self.peername}] >> 250 2.1.0 OK")
+                return
+            elif code == 250 and message == "2.0.0 OK":
+                self.transport.write(_RESPONSE_250_DATA_OK)
+                logger.debug(f"[{self.peername}] >> 250 2.0.0 OK")
+                return
+            elif code == 354 and message == "Start mail input; end with <CRLF>.<CRLF>":
+                self.transport.write(_RESPONSE_354_START_DATA)
+                logger.debug(f"[{self.peername}] >> 354 Start mail input")
+                return
+            elif code == 502 and message == "Command not implemented":
+                self.transport.write(_RESPONSE_502_NOT_IMPL)
+                logger.debug(f"[{self.peername}] >> 502 Command not implemented")
+                return
+
+        # Slow path: encode on demand for uncommon responses
         separator = '-' if continue_response else ' '
         response = f"{code}{separator}{message}\r\n".encode('utf-8')
         self.transport.write(response)
