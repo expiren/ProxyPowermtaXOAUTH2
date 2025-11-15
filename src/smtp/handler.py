@@ -287,18 +287,20 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.send_response(451, "Internal error")
 
     async def verify_xoauth2(self, account: AccountConfig) -> bool:
-        """Verify token via XOAUTH2 authentication"""
+        """Verify token via XOAUTH2 authentication
+
+        NOTE: This method assumes account.lock is ALREADY HELD by the caller
+        """
         start_time = time.time()
 
         try:
             logger.info(f"[{account.email}] Verifying XOAUTH2 token (provider: {account.provider})")
 
-            # Get current token
-            async with account.lock:
-                token = account.token
-                if not token or not token.access_token:
-                    logger.error(f"[{account.email}] No valid token available for XOAUTH2 verification")
-                    return False
+            # Get current token (NO LOCK - caller already holds it)
+            token = account.token
+            if not token or not token.access_token:
+                logger.error(f"[{account.email}] No valid token available for XOAUTH2 verification")
+                return False
 
             # Construct XOAUTH2 string (using chr(1) for proper byte 0x01 separators)
             xoauth2_string = f"user={account.email}{chr(1)}auth=Bearer {token.access_token}{chr(1)}{chr(1)}"
