@@ -39,18 +39,18 @@ class HTTPSessionPool:
             allowed_methods=["POST", "GET"]
         )
 
-        # Configure adapters for http and https
+        # Configure adapters for http and https (high concurrency settings)
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
-            pool_connections=10,
-            pool_maxsize=20,
+            pool_connections=500,  # Increased for high-volume OAuth2 token refresh
+            pool_maxsize=500,      # Increased for thousands of concurrent requests
         )
 
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
         self._initialized = True
-        logger.info("[HTTPPool] HTTP session pool initialized")
+        logger.info("[HTTPPool] HTTP session pool initialized (pool_connections=500, pool_maxsize=500)")
 
     async def close(self):
         """Close session"""

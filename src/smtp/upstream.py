@@ -5,6 +5,7 @@ import smtplib
 import logging
 import base64
 from typing import Optional, List, Tuple, Callable, Any
+from concurrent.futures import ThreadPoolExecutor
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
@@ -23,8 +24,15 @@ Metrics = MetricsCollector
 class UpstreamRelay:
     """Handles relay of messages to upstream SMTP servers via XOAUTH2"""
 
-    def __init__(self, oauth_manager: OAuth2Manager):
+    def __init__(self, oauth_manager: OAuth2Manager, max_workers: int = 500):
         self.oauth_manager = oauth_manager
+
+        # Create dedicated thread pool for SMTP operations (high concurrency)
+        self.executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="smtp_relay"
+        )
+        logger.info(f"[UpstreamRelay] Initialized with {max_workers} worker threads")
 
     async def send_message(
         self,
@@ -148,8 +156,8 @@ class UpstreamRelay:
                     logger.error(f"[{account.email}] Unexpected error: {e}")
                     return (False, 450, "4.4.2 Temporary failure")
 
-            # Execute in thread pool
-            result: Tuple[bool, int, str] = await loop.run_in_executor(None, connect_and_send)  # type: ignore
+            # Execute in dedicated thread pool (500 workers for high concurrency)
+            result: Tuple[bool, int, str] = await loop.run_in_executor(self.executor, connect_and_send)  # type: ignore
             success, smtp_code, message = result
 
             # Update metrics
