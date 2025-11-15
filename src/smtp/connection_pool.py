@@ -234,10 +234,14 @@ class SMTPConnectionPool:
         """Create new authenticated SMTP connection"""
         try:
             # Create connection
+            # For port 587: use_tls=False (we'll use STARTTLS explicitly)
+            # For port 465: use_tls=True (implicit TLS)
             smtp = aiosmtplib.SMTP(
                 hostname=smtp_host,
                 port=smtp_port,
-                timeout=15
+                timeout=15,
+                use_tls=False,  # Don't use implicit TLS - we'll use STARTTLS
+                start_tls=False  # Don't auto-start TLS - we'll control it manually
             )
 
             # Connect
@@ -249,6 +253,7 @@ class SMTPConnectionPool:
             if smtp_port == 587 or smtp.supports_extension('STARTTLS'):
                 await smtp.starttls()
                 logger.debug(f"[Pool] STARTTLS completed for {account_email}")
+
 
                 # Send EHLO again after STARTTLS (required by RFC 3207)
                 await smtp.ehlo()
