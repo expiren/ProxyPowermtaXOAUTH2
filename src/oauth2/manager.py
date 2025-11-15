@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import json
+import aiohttp
 from typing import Optional, Dict, TYPE_CHECKING
 from datetime import datetime, timedelta, UTC
 
@@ -138,29 +139,8 @@ class OAuth2Manager:
             }
 
         try:
-            response = await http_pool.post(token_url, payload, timeout=self.timeout)
-
-            if response.status_code != 200:
-                error_msg = response.text[:300]
-                logger.error(
-                    f"[OAuth2Manager] Token refresh failed ({response.status_code}): {error_msg}"
-                )
-
-                # Parse error response
-                try:
-                    error_data = response.json()
-                    error_code = error_data.get('error', '')
-
-                    if error_code == 'invalid_grant':
-                        raise InvalidGrant(f"Invalid refresh token for {account.email}")
-                    elif response.status_code >= 500:
-                        raise ServiceUnavailable(f"OAuth2 service error: {error_code}")
-                except json.JSONDecodeError:
-                    pass
-
-                raise TokenRefreshError(f"HTTP {response.status_code}: {error_msg}")
-
-            token_data = response.json()
+            # aiohttp-based http_pool.post() returns dict directly (or raises exception)
+            token_data = await http_pool.post(token_url, payload, timeout=self.timeout)
 
             # Extract token info
             access_token = token_data.get('access_token')
@@ -199,6 +179,16 @@ class OAuth2Manager:
 
         except TokenRefreshError:
             raise
+        except aiohttp.ClientResponseError as e:
+            # HTTP error from OAuth provider
+            if e.status == 400:
+                raise InvalidGrant(f"Invalid refresh token for {account.email}")
+            elif e.status >= 500:
+                raise ServiceUnavailable(f"OAuth2 service error: HTTP {e.status}")
+            raise TokenRefreshError(f"Token refresh HTTP error: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Network error or timeout
+            raise TokenRefreshError(f"Token refresh network error: {e}")
         except Exception as e:
             raise TokenRefreshError(f"Token refresh failed: {e}")
 

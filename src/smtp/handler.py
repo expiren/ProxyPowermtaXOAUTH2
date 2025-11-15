@@ -50,6 +50,10 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.active_connections: Dict[str, int] = defaultdict(int)
         self.lock = asyncio.Lock()
 
+        # Line processing queue (to avoid task spam)
+        self.line_queue = asyncio.Queue()
+        self.processing_task = None
+
     def connection_made(self, transport):
         """New connection established"""
         self.transport = transport
@@ -60,6 +64,9 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.send_response(220, "ESMTP service ready")
         self.state = 'INITIAL'
 
+        # Start ONE task per connection to process lines (not per-line!)
+        self.processing_task = asyncio.create_task(self._process_lines())
+
     def connection_lost(self, exc):
         """Connection closed"""
         if exc:
@@ -67,24 +74,44 @@ class SMTPProxyHandler(asyncio.Protocol):
         else:
             logger.info(f"Connection closed normally")
 
-        if self.current_account:
-            async def update_active():
-                async with self.lock:
-                    if self.current_account.account_id in self.active_connections:
-                        self.active_connections[self.current_account.account_id] -= 1
-                        Metrics.smtp_connections_active.labels(
-                            account=self.current_account.email
-                        ).set(self.active_connections[self.current_account.account_id])
+        # Cancel processing task
+        if self.processing_task and not self.processing_task.done():
+            self.processing_task.cancel()
 
-            asyncio.create_task(update_active())
+        # Update metrics synchronously (no task needed - runs in event loop)
+        if self.current_account:
+            # Metrics updates are thread-safe, no need for async task
+            if self.current_account.account_id in self.active_connections:
+                self.active_connections[self.current_account.account_id] -= 1
+                Metrics.smtp_connections_active.labels(
+                    account=self.current_account.email
+                ).set(self.active_connections[self.current_account.account_id])
 
     def data_received(self, data):
         """Data received from client"""
         self.buffer += data
 
+        # Extract complete lines and queue them for processing
         while b'\r\n' in self.buffer:
             line, self.buffer = self.buffer.split(b'\r\n', 1)
-            asyncio.create_task(self.handle_line(line))
+            # Put line in queue instead of creating task (queuing is sync and fast)
+            self.line_queue.put_nowait(line)
+
+    async def _process_lines(self):
+        """Process lines from queue (ONE task per connection instead of per-line)"""
+        try:
+            while True:
+                # Wait for next line from queue
+                line = await self.line_queue.get()
+                try:
+                    await self.handle_line(line)
+                except Exception as e:
+                    logger.error(f"[{self.peername}] Error processing line: {e}")
+                finally:
+                    self.line_queue.task_done()
+        except asyncio.CancelledError:
+            logger.debug(f"[{self.peername}] Line processing task cancelled")
+            raise
 
     async def handle_line(self, line: bytes):
         """Process a single SMTP command line"""
