@@ -288,7 +288,8 @@ sudo systemctl enable xoauth2-proxy
       "client_id": "YOUR_CLIENT_ID_1.apps.googleusercontent.com",
       "client_secret": "YOUR_CLIENT_SECRET_1",
       "refresh_token": "1//0gJA7asfdZKRE8z...",
-      "oauth_endpoint": "https://smtp.gmail.com:587",
+      "oauth_endpoint": "smtp.gmail.com:587",
+      "oauth_token_url": "https://oauth2.googleapis.com/token",
       "max_concurrent_messages": 10,
       "max_messages_per_hour": 10000
     }
