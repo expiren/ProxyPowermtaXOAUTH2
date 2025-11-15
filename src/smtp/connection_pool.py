@@ -244,12 +244,13 @@ class SMTPConnectionPool:
             await smtp.connect()
             logger.debug(f"[Pool] Connected to {smtp_host}:{smtp_port} for {account_email}")
 
-            # STARTTLS
-            if smtp.supports_extension('STARTTLS'):
+            # STARTTLS (always required for port 587)
+            # Note: Port 587 is the submission port and requires STARTTLS
+            if smtp_port == 587 or smtp.supports_extension('STARTTLS'):
                 await smtp.starttls()
                 logger.debug(f"[Pool] STARTTLS completed for {account_email}")
 
-                # Send EHLO again after STARTTLS (required by RFC)
+                # Send EHLO again after STARTTLS (required by RFC 3207)
                 await smtp.ehlo()
                 logger.debug(f"[Pool] EHLO sent after STARTTLS for {account_email}")
 
