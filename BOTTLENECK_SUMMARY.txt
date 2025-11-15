@@ -1,0 +1,109 @@
+╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                      XOAUTH2 PROXY - PERFORMANCE BOTTLENECK SUMMARY TABLE                                                                              ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+
+┌──────┬────────────────────────────────────────┬────────┬──────────────────┬──────────────────┬─────────────────────────────────────────────┐
+│ ID   │ BOTTLENECK                             │ FILE   │ LINE(S)          │ SEVERITY         │ THROUGHPUT IMPACT                           │
+├──────┼────────────────────────────────────────┼────────┼──────────────────┼──────────────────┼─────────────────────────────────────────────┤
+│ 1    │ Unbounded Task Creation                │ H      │ 81-87            │ CRITICAL         │ 50-100% reduction (200k tasks/sec overhead) │
+│ 2    │ NOOP Health Checks (50k/min)           │ CP     │ 127-147          │ CRITICAL         │ 30-50% reduction (timeout delays)           │
+│ 3    │ Blocking HTTP in Thread Pool           │ HP     │ 69-77            │ CRITICAL         │ 10-20% reduction (thread starvation)        │
+│ 4    │ Global Pool Lock                       │ CP     │ 88-92, 206-208   │ CRITICAL         │ 70-90% reduction (833 locks/sec)            │
+│ 5    │ Linear O(n) Pool Search + Remove       │ CP     │ 99-147           │ CRITICAL         │ 30-40% reduction (O(n) operations)          │
+│ 6    │ Multi-Lock Auth Flow                   │ H      │ 204, 212, 266    │ HIGH             │ 20-30% reduction (4+ nested locks)          │
+│ 7    │ Blocking Metrics Server                │ MS     │ 71-72            │ HIGH             │ 5-10% reduction (thread exhaustion)         │
+│ 8    │ Unbounded Metric Cardinality           │ MC     │ All metrics      │ HIGH             │ 5-15% reduction (memory + contention)       │
+│ 9    │ Account Lookup Race Condition          │ AM     │ 40-60            │ HIGH             │ 1-3% reduction (cache invalidation)         │
+│ 10   │ String Conversion (Bytes→UTF8)         │ UR     │ 127-130          │ HIGH             │ 5-10% reduction (decode CPU cost)           │
+│ 11   │ Cleanup Task Serialization             │ CP     │ 290-324          │ HIGH             │ Periodic 50-100ms latency spikes            │
+│ 12   │ Double-Wrapped Token Refresh           │ OM     │ 91-112           │ MEDIUM           │ 5-20% reduction (3x HTTP calls possible)    │
+│ 13   │ Lock Created in Dataclass Field        │ AM     │ 33               │ MEDIUM           │ Catastrophic on hot-reload (rare)           │
+│ 14   │ Concurrent Msg Tracking Inconsistency  │ H      │ 50-51, 350-380   │ MEDIUM           │ 5% reduction (logic confusion)               │
+│ 15   │ Token Cache Global Lock                │ OM     │ 79-88            │ MEDIUM           │ 10-20% reduction (cache hit contention)     │
+├──────┼────────────────────────────────────────┼────────┼──────────────────┼──────────────────┼─────────────────────────────────────────────┤
+│      │ ABBREVIATIONS:                         │        │                  │                  │                                             │
+│      │ H = src/smtp/handler.py                │        │                  │                  │                                             │
+│      │ CP = src/smtp/connection_pool.py       │        │                  │                  │                                             │
+│      │ HP = src/utils/http_pool.py            │        │                  │                  │                                             │
+│      │ MS = src/metrics/server.py             │        │                  │                  │                                             │
+│      │ MC = src/metrics/collector.py          │        │                  │                  │                                             │
+│      │ AM = src/accounts/manager.py           │        │                  │                  │                                             │
+│      │ UR = src/smtp/upstream.py              │        │                  │                  │                                             │
+│      │ OM = src/oauth2/manager.py             │        │                  │                  │                                             │
+└──────┴────────────────────────────────────────┴────────┴──────────────────┴──────────────────┴─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ IMPLEMENTATION PHASES                                                                                                                               │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ PHASE 1 (CRITICAL - Must do for 50k msg/min):                                                                                                      │
+│   1. Task creation batching (ID #1) - 50-100% gain                                                                                                  │
+│   2. Remove NOOP checks (ID #2) - 30-50% gain                                                                                                      │
+│   3. Switch to aiohttp (ID #3) - 10-20% gain                                                                                                       │
+│   4. Remove global lock (ID #4) - 70-90% gain                                                                                                      │
+│   5. Use deque + O(1) operations (ID #5) - 30-40% gain                                                                                              │
+│ Expected result: 5-10k msg/min → 25-30k msg/min (5x improvement)                                                                                   │
+│                                                                                                                                                     │
+│ PHASE 2 (HIGH - 10x overall improvement):                                                                                                         │
+│   6. Lock consolidation in auth (ID #6) - 20-30% gain                                                                                              │
+│   7. Async metrics server (ID #7) - 5-10% gain                                                                                                     │
+│   8. Fix metric cardinality (ID #8) - 5-15% gain                                                                                                   │
+│   9. Per-email cache locks (ID #15) - 10-20% gain                                                                                                  │
+│  10. Parallelize cleanup (ID #11) - Remove periodic spikes                                                                                        │
+│ Expected result: 25-30k msg/min → 40-50k msg/min (2x improvement)                                                                                  │
+│                                                                                                                                                     │
+│ PHASE 3 (MEDIUM - Polish & edge cases):                                                                                                           │
+│  11. Bytes passthrough (ID #10) - 5-10% gain                                                                                                       │
+│  12. Fix token refresh double-wrap (ID #12) - 5% gain                                                                                              │
+│  13. Account lock durability (ID #13) - Prevent catastrophic reload                                                                               │
+│  14. Unify concurrency tracking (ID #14) - 5% gain                                                                                                 │
+│  15. Fix account cache race (ID #9) - 1-3% gain                                                                                                    │
+│ Expected result: 40-50k msg/min → 50k+ msg/min (stable)                                                                                           │
+│                                                                                                                                                     │
+│ ESTIMATED TIME BREAKDOWN:                                                                                                                         │
+│   Phase 1: 8-12 hours (5 moderate changes, lots of testing)                                                                                       │
+│   Phase 2: 12-16 hours (5 moderate-complex changes, integration testing)                                                                          │
+│   Phase 3: 8-10 hours (5 small changes, polish & testing)                                                                                         │
+│   Total: 28-38 hours of engineering work                                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+PERFORMANCE TARGETS:
+
+Current Estimated:    5,000-10,000 msg/min  (833/sec bottleneck)
+After Phase 1:        25,000-30,000 msg/min (417-500 msg/sec)
+After Phase 2:        40,000-50,000 msg/min (667-833 msg/sec)
+Target:               50,000+ msg/min        (833+ msg/sec)
+
+P95 LATENCY TARGETS:
+Current:              200-500ms (severe contention)
+After Phase 1:        100-200ms (global locks removed)
+After Phase 2:        50-100ms (per-account locks only)
+After Phase 3:        <50ms (fully optimized)
+
+MEMORY TARGETS:
+Current:              500MB-1GB
+After Phase 1:        400-800MB (better data structures)
+After Phase 2:        300-500MB (fewer locks = less overhead)
+After Phase 3:        200-300MB (optimized collections)
+
+TESTING ROADMAP:
+
+1. Baseline measurement (current state)
+   - Load test: 1k, 5k, 10k, 20k, 50k msg/min
+   - Monitor: CPU, memory, lock waits, task queue depth
+   - Record: Throughput, P50/P95/P99 latency
+
+2. After Phase 1: Repeat baseline
+   - Verify 5x improvement in throughput
+   - Check memory stability
+   - Validate no message loss
+
+3. After Phase 2: Repeat baseline
+   - Verify additional 2x improvement
+   - Check lock contention metrics
+   - Stress test with 100+ concurrent accounts
+
+4. After Phase 3: Final validation
+   - Production load test (if possible with real data)
+   - Chaos testing (kill upstream SMTP connections, etc.)
+   - Long-running stability test (24+ hours @ 50k msg/min)
+
