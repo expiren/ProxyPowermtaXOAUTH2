@@ -32,7 +32,7 @@ The `accounts.json` file contains a JSON array of account configurations. Each a
 | `client_id` | string | OAuth2 client ID from provider |
 | `client_secret` | string | OAuth2 client secret from provider |
 | `refresh_token` | string | OAuth2 refresh token for this account |
-| `oauth_endpoint` | string | OAuth authorization endpoint URL |
+| `oauth_endpoint` | string | SMTP server endpoint (host:port) for the provider |
 | `oauth_token_url` | string | OAuth token URL for refresh requests |
 
 ### Optional Fields
@@ -75,7 +75,7 @@ The `accounts.json` file contains a JSON array of account configurations. Each a
      "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
      "client_secret": "YOUR_CLIENT_SECRET",
      "refresh_token": "YOUR_REFRESH_TOKEN",
-     "oauth_endpoint": "https://oauth2.googleapis.com",
+     "oauth_endpoint": "smtp.gmail.com:587",
      "oauth_token_url": "https://oauth2.googleapis.com/token"
    }
    ```
@@ -114,7 +114,7 @@ The `accounts.json` file contains a JSON array of account configurations. Each a
      "client_id": "YOUR_CLIENT_ID",
      "client_secret": "YOUR_CLIENT_SECRET",
      "refresh_token": "YOUR_REFRESH_TOKEN",
-     "oauth_endpoint": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+     "oauth_endpoint": "smtp.office365.com:587",
      "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token"
    }
    ```
@@ -135,7 +135,7 @@ The `accounts.json` file contains a JSON array of account configurations. Each a
     "client_id": "...",
     "client_secret": "...",
     "refresh_token": "...",
-    "oauth_endpoint": "https://oauth2.googleapis.com",
+    "oauth_endpoint": "smtp.gmail.com:587",
     "oauth_token_url": "https://oauth2.googleapis.com/token",
     "max_concurrent_messages": 10,
     "max_messages_per_hour": 10000
