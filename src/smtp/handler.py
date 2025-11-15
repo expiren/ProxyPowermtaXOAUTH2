@@ -46,9 +46,8 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.buffer = b''
         self.state = 'INITIAL'
 
-        # Per-account tracking
+        # Per-account tracking (no lock needed - metrics client is thread-safe)
         self.active_connections: Dict[str, int] = defaultdict(int)
-        self.lock = asyncio.Lock()
 
         # Line processing queue (to avoid task spam)
         self.line_queue = asyncio.Queue()
@@ -235,7 +234,7 @@ class SMTPProxyHandler(asyncio.Protocol):
                 self.send_response(535, "authentication failed")
                 return
 
-            # Check and refresh token if needed
+            # Check and refresh token if needed (consolidated under account lock)
             async with account.lock:
                 if account.token.is_expired():
                     logger.info(f"[{auth_email}] Token expired, refreshing")
@@ -246,28 +245,28 @@ class SMTPProxyHandler(asyncio.Protocol):
                         self.send_response(454, "Temporary authentication failure")
                         return
 
-            # Verify token with upstream XOAUTH2
-            if not await self.verify_xoauth2(account):
-                logger.error(f"[{auth_email}] XOAUTH2 verification failed")
-                Metrics.auth_attempts_total.labels(account=auth_email, result='xoauth2_failed').inc()
-                self.send_response(535, "authentication failed")
-                return
+                # Verify token with upstream XOAUTH2 (while still holding account lock)
+                if not await self.verify_xoauth2(account):
+                    logger.error(f"[{auth_email}] XOAUTH2 verification failed")
+                    Metrics.auth_attempts_total.labels(account=auth_email, result='xoauth2_failed').inc()
+                    self.send_response(535, "authentication failed")
+                    return
 
-            # Authentication successful
+                # Authentication successful - update connection count (still under account lock)
+                # This consolidates all auth operations under ONE lock instead of multiple
+                account_id = account.account_id
+                self.active_connections[account_id] += 1
+                Metrics.smtp_connections_active.labels(account=auth_email).set(
+                    self.active_connections[account_id]
+                )
+
+            # Set state outside of lock
             self.current_account = account
             self.authenticated = True
 
             duration = time.time() - start_time
             Metrics.auth_attempts_total.labels(account=auth_email, result='success').inc()
             Metrics.auth_duration_seconds.labels(account=auth_email).observe(duration)
-
-            # Update connection count
-            async with self.lock:
-                account_id = account.account_id
-                self.active_connections[account_id] += 1
-                Metrics.smtp_connections_active.labels(account=auth_email).set(
-                    self.active_connections[account_id]
-                )
 
             logger.info(f"[{self.peername}] AUTH successful for {auth_email}")
             self.send_response(235, "2.7.0 Authentication successful")
