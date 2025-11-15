@@ -1,0 +1,21 @@
+# Large dataset test - 20 accounts (mix of Gmail and Outlook)
+user1@gmail.com,acc1,1//0gJA7asfdZKRE8z...token1,558976430978-xxxxxxx1.apps.googleusercontent.com
+user2@outlook.com,acc2,M.C519_BAY.0.U.-token2$$,9e5f94bc-e8a4-4e73-b8be-63364c29d753
+user3@gmail.com,acc3,1//0gJA7asfdZKRE8z...token3,558976430978-xxxxxxx3.apps.googleusercontent.com
+user4@hotmail.com,acc4,M.C519_BAY.0.U.-token4$$,9e5f94bc-e8a4-4e73-b8be-63364c29d754
+user5@gmail.com,acc5,1//0gJA7asfdZKRE8z...token5,558976430978-xxxxxxx5.apps.googleusercontent.com
+user6@outlook.com,acc6,M.C519_BAY.0.U.-token6$$,9e5f94bc-e8a4-4e73-b8be-63364c29d756
+user7@gmail.com,acc7,1//0gJA7asfdZKRE8z...token7,558976430978-xxxxxxx7.apps.googleusercontent.com
+user8@live.com,acc8,M.C519_BAY.0.U.-token8$$,9e5f94bc-e8a4-4e73-b8be-63364c29d758
+user9@gmail.com,acc9,1//0gJA7asfdZKRE8z...token9,558976430978-xxxxxxx9.apps.googleusercontent.com
+user10@hotmail.com,acc10,M.C519_BAY.0.U.-token10$$,9e5f94bc-e8a4-4e73-b8be-63364c29d760
+user11@gmail.com,acc11,1//0gJA7asfdZKRE8z...token11,558976430978-xxxxxxx11.apps.googleusercontent.com
+user12@outlook.com,acc12,M.C519_BAY.0.U.-token12$$,9e5f94bc-e8a4-4e73-b8be-63364c29d762
+user13@gmail.com,acc13,1//0gJA7asfdZKRE8z...token13,558976430978-xxxxxxx13.apps.googleusercontent.com
+user14@hotmail.com,acc14,M.C519_BAY.0.U.-token14$$,9e5f94bc-e8a4-4e73-b8be-63364c29d764
+user15@gmail.com,acc15,1//0gJA7asfdZKRE8z...token15,558976430978-xxxxxxx15.apps.googleusercontent.com
+user16@outlook.com,acc16,M.C519_BAY.0.U.-token16$$,9e5f94bc-e8a4-4e73-b8be-63364c29d766
+user17@gmail.com,acc17,1//0gJA7asfdZKRE8z...token17,558976430978-xxxxxxx17.apps.googleusercontent.com
+user18@hotmail.com,acc18,M.C519_BAY.0.U.-token18$$,9e5f94bc-e8a4-4e73-b8be-63364c29d768
+user19@gmail.com,acc19,1//0gJA7asfdZKRE8z...token19,558976430978-xxxxxxx19.apps.googleusercontent.com
+user20@outlook.com,acc20,M.C519_BAY.0.U.-token20$$,9e5f94bc-e8a4-4e73-b8be-63364c29d770

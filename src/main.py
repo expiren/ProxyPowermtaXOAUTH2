@@ -1,0 +1,109 @@
+"""Main entry point for XOAUTH2 Proxy"""
+
+import asyncio
+import logging
+import signal
+import sys
+import platform
+
+from src.cli import parse_arguments, create_settings
+from src.logging.setup import setup_logging
+from src.smtp.proxy import SMTPProxyServer
+
+
+# Setup logging early
+setup_logging()
+logger = logging.getLogger('xoauth2_proxy')
+
+
+class Application:
+    """Main application orchestrator"""
+
+    def __init__(self):
+        self.proxy_server = None
+        self.running = False
+
+    async def run(self):
+        """Main application loop"""
+        try:
+            # Parse CLI arguments
+            args, config_path = parse_arguments()
+
+            # Verify config exists
+            if not config_path.exists():
+                logger.error(f"Config file not found: {config_path}")
+                sys.exit(1)
+
+            # Create settings
+            settings = create_settings(args)
+
+            # Create and start proxy server
+            logger.info(f"Initializing XOAUTH2 Proxy from {config_path}")
+            self.proxy_server = SMTPProxyServer(
+                config_path=config_path,
+                settings=settings
+            )
+
+            # Setup signal handlers
+            self._setup_signal_handlers()
+
+            # Start proxy
+            self.running = True
+            await self.proxy_server.start()
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+            await self.shutdown()
+        except Exception as e:
+            logger.error(f"Application error: {e}", exc_info=True)
+            sys.exit(1)
+
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown"""
+        loop = asyncio.get_running_loop()
+
+        async def shutdown_handler():
+            await self.shutdown()
+
+        if platform.system() != "Windows":
+            # Unix-like systems
+            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(shutdown_handler()))
+            loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(shutdown_handler()))
+            loop.add_signal_handler(signal.SIGHUP, lambda: logger.info("Received SIGHUP - hot reload not yet implemented"))
+        else:
+            # Windows
+            signal.signal(signal.SIGTERM, lambda sig, frame: asyncio.create_task(shutdown_handler()))
+            signal.signal(signal.SIGINT, lambda sig, frame: asyncio.create_task(shutdown_handler()))
+
+    async def shutdown(self):
+        """Shutdown application"""
+        if not self.running:
+            return
+
+        logger.info("Starting graceful shutdown...")
+        self.running = False
+
+        if self.proxy_server:
+            await self.proxy_server.shutdown()
+
+        logger.info("Application stopped")
+
+
+def main():
+    """Main entry point"""
+    app = Application()
+
+    # Create event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(app.run())
+    except KeyboardInterrupt:
+        logger.info("Terminated")
+    finally:
+        loop.close()
+
+
+if __name__ == '__main__':
+    main()

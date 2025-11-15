@@ -1,0 +1,19 @@
+# XOAUTH2 Proxy v2.0 - Production Dependencies
+# Python 3.8+ required
+
+# Core async SMTP server
+aiosmtpd>=1.4.4
+
+# OAuth2 HTTP requests for token refresh
+requests>=2.28.0
+
+# Prometheus metrics and monitoring
+prometheus-client>=0.15.0
+
+# Optional: HTTPS/TLS support (included in stdlib but listed for clarity)
+# ssl (built-in)
+
+# For development and testing (optional)
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# pytest-cov>=4.0.0

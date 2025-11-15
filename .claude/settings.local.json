@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:serverok.in)",
+      "WebSearch",
+      "Bash(python xoauth2_proxy.py:*)",
+      "Bash(find:*)",
+      "Bash(python send_email.py:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(timeout 5 python:*)",
+      "Bash(for dir in src/config src/oauth2 src/smtp src/accounts src/metrics src/logging src/utils)",
+      "Bash(do touch \"$dir/__init__.py\")",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(dir:*)",
+      "Bash(nul)",
+      "Bash(findstr:*)",
+      "Bash(python:*)",
+      "Bash(timeout 10 python:*)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
