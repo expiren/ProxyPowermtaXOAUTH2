@@ -28,9 +28,11 @@ class UpstreamRelay:
         self,
         oauth_manager: OAuth2Manager,
         max_connections_per_account: int = 50,
-        max_messages_per_connection: int = 100
+        max_messages_per_connection: int = 100,
+        rate_limiter = None  # ✅ Optional RateLimiter for per-account rate limiting
     ):
         self.oauth_manager = oauth_manager
+        self.rate_limiter = rate_limiter  # ✅ Store rate limiter
 
         # Create SMTP connection pool (fully async, no thread pool needed!)
         self.connection_pool = SMTPConnectionPool(
@@ -46,7 +48,8 @@ class UpstreamRelay:
         logger.info(
             f"[UpstreamRelay] Initialized with connection pooling "
             f"(max_conn_per_account={max_connections_per_account}, "
-            f"max_msg_per_conn={max_messages_per_connection})"
+            f"max_msg_per_conn={max_messages_per_connection}, "
+            f"rate_limiting={'enabled' if rate_limiter else 'disabled'})"
         )
 
     async def initialize(self):
@@ -84,6 +87,18 @@ class UpstreamRelay:
         start_time = time.time()
 
         try:
+            # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)
+            if self.rate_limiter:
+                try:
+                    # Acquire token from rate limiter (raises RateLimitExceeded if over limit)
+                    await self.rate_limiter.acquire(account.email)
+                    logger.debug(f"[{account.email}] Rate limit check passed")
+                except Exception as e:
+                    # Rate limit exceeded - reject with temporary failure
+                    logger.warning(f"[{account.email}] Rate limit exceeded: {e}")
+                    Metrics.errors_total.labels(error_type='rate_limit').inc()
+                    return (False, 451, "4.4.4 Rate limit exceeded, try again later")
+
             # Refresh token if needed
             token = await self.oauth_manager.get_or_refresh_token(account)
             if not token:

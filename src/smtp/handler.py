@@ -334,13 +334,29 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.send_response(503, "RCPT first")
             return
 
-        # Increment concurrency counter
+        # ✅ Check per-account concurrency limit BEFORE accepting message
         async with self.current_account.lock:
+            if not self.current_account.can_send():
+                logger.warning(
+                    f"[{self.current_account.email}] Per-account concurrency limit reached "
+                    f"({self.current_account.concurrent_messages}/{self.current_account.max_concurrent_messages})"
+                )
+                # Temporary failure - client should retry
+                self.send_response(451, "4.4.5 Server busy - per-account limit reached, try again later")
+                # Reset message state
+                self.mail_from = None
+                self.rcpt_tos = []
+                return
+
+            # ✅ Increment concurrency counter after check passes
             self.current_account.concurrent_messages += 1
             # Increment global concurrent messages gauge
             Metrics.concurrent_messages.inc()
 
-        logger.info(f"[{self.current_account.email}] DATA: {len(self.rcpt_tos)} recipients")
+        logger.info(
+            f"[{self.current_account.email}] DATA: {len(self.rcpt_tos)} recipients "
+            f"(concurrent={self.current_account.concurrent_messages}/{self.current_account.max_concurrent_messages})"
+        )
         self.send_response(354, "Start mail input; end with <CRLF>.<CRLF>")
         self.state = 'DATA_RECEIVING'
         self.message_data = b''

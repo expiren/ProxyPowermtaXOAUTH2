@@ -11,6 +11,7 @@ from src.accounts.manager import AccountManager
 from src.metrics.server import MetricsServer
 from src.smtp.handler import SMTPProxyHandler
 from src.smtp.upstream import UpstreamRelay
+from src.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -46,14 +47,21 @@ class SMTPProxyServer:
         self.account_manager = AccountManager(config_path, proxy_config=self.proxy_config)
         self.oauth_manager = OAuth2Manager(timeout=settings.oauth2_timeout)
 
+        # ✅ Initialize RateLimiter (uses provider defaults, per-account overrides applied at runtime)
+        # Default to Gmail's limit (10k messages/hour) as conservative baseline
+        gmail_config = self.proxy_config.get_provider_config('gmail')
+        default_messages_per_hour = gmail_config.rate_limiting.messages_per_hour
+        self.rate_limiter = RateLimiter(messages_per_hour=default_messages_per_hour)
+        logger.info(f"[SMTPProxyServer] RateLimiter initialized (default: {default_messages_per_hour} msg/hour)")
+
         # ✅ Initialize UpstreamRelay with provider-specific connection pool settings
         # Use Gmail defaults as baseline (most common provider)
-        gmail_config = self.proxy_config.get_provider_config('gmail')
         pool_config = gmail_config.connection_pool
         self.upstream_relay = UpstreamRelay(
             self.oauth_manager,
             max_connections_per_account=pool_config.max_connections_per_account,
-            max_messages_per_connection=pool_config.max_messages_per_connection
+            max_messages_per_connection=pool_config.max_messages_per_connection,
+            rate_limiter=self.rate_limiter  # ✅ Pass rate limiter for per-account limits
         )
 
         self.metrics_server = MetricsServer(host='0.0.0.0', port=settings.metrics_port)
