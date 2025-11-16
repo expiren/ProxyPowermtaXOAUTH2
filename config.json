@@ -6,7 +6,6 @@
     "description": "Global proxy settings",
 
     "concurrency": {
-      "max_concurrent_connections": 1000,
       "global_concurrency_limit": 100,
       "backpressure_queue_size": 1000,
       "connection_backlog": 100
@@ -14,7 +13,6 @@
 
     "timeouts": {
       "oauth2_timeout": 10,
-      "smtp_timeout": 30,
       "connection_acquire_timeout": 5
     }
   },
@@ -118,15 +116,6 @@
         "half_open_max_calls": 2
       }
     }
-  },
-
-  "features": {
-    "smtp_pipelining": true,
-    "connection_pooling": true,
-    "xoauth2_verification": false,
-    "backpressure_control": true,
-    "rate_limiting": true,
-    "circuit_breaker": true
   },
 
   "accounts": [

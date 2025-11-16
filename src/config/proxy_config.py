@@ -111,12 +111,10 @@ class ProviderConfig:
 @dataclass
 class GlobalConfig:
     """Global proxy configuration"""
-    max_concurrent_connections: int = 1000
     global_concurrency_limit: int = 100
     backpressure_queue_size: int = 1000
     connection_backlog: int = 100
     oauth2_timeout: int = 10
-    smtp_timeout: int = 30
     connection_acquire_timeout: int = 5
 
     @classmethod
@@ -126,36 +124,11 @@ class GlobalConfig:
         timeouts = data.get('timeouts', {})
 
         return cls(
-            max_concurrent_connections=concurrency.get('max_concurrent_connections', 1000),
             global_concurrency_limit=concurrency.get('global_concurrency_limit', 100),
             backpressure_queue_size=concurrency.get('backpressure_queue_size', 1000),
             connection_backlog=concurrency.get('connection_backlog', 100),
             oauth2_timeout=timeouts.get('oauth2_timeout', 10),
-            smtp_timeout=timeouts.get('smtp_timeout', 30),
             connection_acquire_timeout=timeouts.get('connection_acquire_timeout', 5),
-        )
-
-
-@dataclass
-class FeatureFlags:
-    """Feature flags"""
-    smtp_pipelining: bool = True
-    connection_pooling: bool = True
-    xoauth2_verification: bool = False
-    backpressure_control: bool = True
-    rate_limiting: bool = True
-    circuit_breaker: bool = True
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'FeatureFlags':
-        """Create from dictionary"""
-        return cls(
-            smtp_pipelining=data.get('smtp_pipelining', True),
-            connection_pooling=data.get('connection_pooling', True),
-            xoauth2_verification=data.get('xoauth2_verification', False),
-            backpressure_control=data.get('backpressure_control', True),
-            rate_limiting=data.get('rate_limiting', True),
-            circuit_breaker=data.get('circuit_breaker', True),
         )
 
 
@@ -166,7 +139,6 @@ class ProxyConfig:
         self.config_path = config_path
         self.global_config: GlobalConfig = GlobalConfig()
         self.providers: Dict[str, ProviderConfig] = {}
-        self.features: FeatureFlags = FeatureFlags()
 
         if config_path and config_path.exists():
             self.load(config_path)
@@ -193,10 +165,6 @@ class ProxyConfig:
             if 'providers' in data:
                 for provider_name, provider_data in data['providers'].items():
                     self.providers[provider_name] = ProviderConfig.from_dict(provider_data)
-
-            # Load feature flags
-            if 'features' in data:
-                self.features = FeatureFlags.from_dict(data['features'])
 
             logger.info(
                 f"[ProxyConfig] Loaded configuration from {config_path} "
@@ -275,5 +243,4 @@ class ProxyConfig:
                 }
                 for name, cfg in self.providers.items()
             },
-            'features': self.features.__dict__,
         }
