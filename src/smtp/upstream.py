@@ -154,12 +154,7 @@ class UpstreamRelay:
                 code, msg = await connection.mail(mail_from)
                 if code not in (250, 251):
                     logger.error(f"[{account.email}] MAIL FROM rejected: {code} {msg}")
-                    await self.connection_pool.release(account.email, connection, increment_count=False)
-                    # Close bad connection
-                    try:
-                        await connection.quit()
-                    except Exception as e:
-                        logger.debug(f"[{account.email}] Error closing connection after MAIL FROM rejection: {e}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
                     return (False, code, msg)
 
                 # RCPT TO (for each recipient - typically just one)
@@ -173,24 +168,14 @@ class UpstreamRelay:
                 # If all recipients rejected, fail
                 if rejected_recipients and len(rejected_recipients) == len(rcpt_tos):
                     logger.error(f"[{account.email}] All recipients rejected")
-                    await self.connection_pool.release(account.email, connection, increment_count=False)
-                    # Close bad connection
-                    try:
-                        await connection.quit()
-                    except Exception as e:
-                        logger.debug(f"[{account.email}] Error closing connection after RCPT rejection: {e}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
                     return (False, 553, "5.1.3 All recipients rejected")
 
                 # DATA (send message body)
                 code, msg = await connection.data(message_str)
                 if code != 250:
                     logger.error(f"[{account.email}] DATA rejected: {code} {msg}")
-                    await self.connection_pool.release(account.email, connection, increment_count=False)
-                    # Close bad connection
-                    try:
-                        await connection.quit()
-                    except Exception as e:
-                        logger.debug(f"[{account.email}] Error closing connection after DATA rejection: {e}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
                     return (False, code, msg)
 
                 # ✅ SUCCESS - Return connection to pool (KEEP ALIVE for reuse)
@@ -213,11 +198,7 @@ class UpstreamRelay:
                 # Timeout - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP timeout")
                 if connection:  # Only release if connection was acquired
-                    await self.connection_pool.release(account.email, connection, increment_count=False)
-                    try:
-                        await connection.quit()
-                    except Exception as e:
-                        logger.debug(f"[{account.email}] Error closing connection after timeout: {e}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
 
                 return (False, 450, "4.4.2 Connection timeout")
 
@@ -225,11 +206,7 @@ class UpstreamRelay:
                 # Error - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP send error: {e}")
                 if connection:  # Only release if connection was acquired
-                    await self.connection_pool.release(account.email, connection, increment_count=False)
-                    try:
-                        await connection.quit()
-                    except Exception as quit_error:
-                        logger.debug(f"[{account.email}] Error closing connection after send error: {quit_error}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
 
                 # Parse error for better response
                 error_str = str(e).lower()

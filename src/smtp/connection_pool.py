@@ -198,7 +198,7 @@ class SMTPConnectionPool:
 
                 # Check pool size limit (use updated pool reference)
                 pool = self.pools[account_email]
-                if len(pool) >= self.max_connections_per_account:
+                if len(pool) >= max_conn:
                     # Find and close oldest non-busy connection
                     non_busy = [p for p in pool if not p.is_busy]
                     if non_busy:
@@ -283,6 +283,57 @@ class SMTPConnectionPool:
                         f"(msg_count={pooled.message_count})"
                     )
                     return
+
+    async def remove_and_close(self, account_email: str, connection: aiosmtplib.SMTP):
+        """
+        Remove connection from pool and close it (for bad/failed connections)
+
+        Use this instead of release() + quit() when a connection fails SMTP commands.
+        This ensures the bad connection is removed from pool, not recycled.
+
+        Args:
+            account_email: Email address for this account
+            connection: Bad SMTP connection to remove and close
+        """
+        if account_email not in self.pools:
+            # Connection not in pool, just close it
+            try:
+                await connection.quit()
+            except Exception as e:
+                logger.debug(f"[Pool] Error closing connection for {account_email}: {e}")
+            return
+
+        lock = self.locks[account_email]
+        async with lock:
+            pool = self.pools[account_email]
+
+            for pooled in pool:
+                if pooled.connection is connection:
+                    # Release semaphore if held
+                    if pooled.semaphore:
+                        pooled.semaphore.release()
+                        pooled.semaphore = None
+
+                    # Remove from pool (filter creates new deque without this connection)
+                    self.pools[account_email] = deque(p for p in pool if p is not pooled)
+
+                    # Close connection
+                    await self._close_connection(pooled)
+
+                    logger.debug(
+                        f"[Pool] Removed and closed bad connection for {account_email} "
+                        f"(pool_size={len(self.pools[account_email])})"
+                    )
+                    return
+
+            # Connection not found in pool, close it anyway
+            logger.warning(
+                f"[Pool] Connection not found in pool for {account_email}, closing anyway"
+            )
+            try:
+                await connection.quit()
+            except Exception as e:
+                logger.debug(f"[Pool] Error closing connection for {account_email}: {e}")
 
     async def _create_connection(
         self,
