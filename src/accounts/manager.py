@@ -91,9 +91,11 @@ class AccountManager:
                         if new_account.refresh_token == old_account.refresh_token:
                             new_account.token = old_account.token
 
+                # Clear cache BEFORE replacing dicts to prevent race condition
+                # This ensures lookups during replacement will use the new dict instead of stale cache
+                self.email_cache.clear()
                 self.accounts = accounts
                 self.accounts_by_id = {acc.account_id: acc for acc in accounts.values()}
-                self.email_cache.clear()
 
             logger.info(f"[AccountManager] Reloaded {len(accounts)} accounts")
             self.reload_event.set()
