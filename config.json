@@ -16,13 +16,6 @@
       "oauth2_timeout": 10,
       "smtp_timeout": 30,
       "connection_acquire_timeout": 5
-    },
-
-    "logging": {
-      "level": "INFO",
-      "format": "json",
-      "log_rotation": true,
-      "max_log_size_mb": 100
     }
   },
 
