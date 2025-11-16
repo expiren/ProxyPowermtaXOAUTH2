@@ -7,12 +7,12 @@ from enum import Enum
 from datetime import datetime, UTC
 
 from src.utils.exceptions import CircuitBreakerOpen
-from src.smtp.constants import (
-    DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
-    DEFAULT_CIRCUIT_BREAKER_TIMEOUT,
-)
 
 logger = logging.getLogger('xoauth2_proxy')
+
+# Default circuit breaker settings (avoid circular import with smtp.constants)
+DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5
+DEFAULT_CIRCUIT_BREAKER_TIMEOUT = 60
 
 
 class CircuitBreakerState(Enum):
