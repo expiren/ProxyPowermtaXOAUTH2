@@ -90,8 +90,9 @@ class UpstreamRelay:
             # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)
             if self.rate_limiter:
                 try:
-                    # Acquire token from rate limiter (raises RateLimitExceeded if over limit)
-                    await self.rate_limiter.acquire(account.email)
+                    # Acquire token from rate limiter with per-account settings
+                    # (raises RateLimitExceeded if over limit)
+                    await self.rate_limiter.acquire(account.email, account=account)
                     logger.debug(f"[{account.email}] Rate limit check passed")
                 except Exception as e:
                     # Rate limit exceeded - reject with temporary failure

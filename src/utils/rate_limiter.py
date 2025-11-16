@@ -55,43 +55,86 @@ class TokenBucket:
 
 
 class RateLimiter:
-    """Per-account rate limiting"""
+    """Per-account rate limiting with configurable limits"""
 
     def __init__(self, messages_per_hour: int = 10000):
-        self.messages_per_hour = messages_per_hour
+        """
+        Initialize rate limiter with default messages_per_hour
+
+        Args:
+            messages_per_hour: Default limit (used as fallback if account has no config)
+        """
+        self.default_messages_per_hour = messages_per_hour
         self.buckets: Dict[str, TokenBucket] = {}
         self.lock = asyncio.Lock()
 
-        # Messages per hour → tokens per second
-        self.refill_rate = messages_per_hour / 3600.0
+        # Default refill rate (used for accounts without specific config)
+        self.default_refill_rate = messages_per_hour / 3600.0
 
-    async def get_or_create_bucket(self, account_email: str) -> TokenBucket:
-        """Get or create bucket for account"""
+    async def get_or_create_bucket(self, account_email: str, account = None) -> TokenBucket:
+        """
+        Get or create bucket for account with per-account rate limits
+
+        Args:
+            account_email: Email address
+            account: AccountConfig object (optional, uses default limit if None)
+        """
         async with self.lock:
             if account_email not in self.buckets:
+                # ✅ Get per-account rate limit config (or use default)
+                if account:
+                    rate_config = account.get_rate_limit_config()
+                    messages_per_hour = rate_config.messages_per_hour
+                    logger.info(
+                        f"[RateLimiter] Creating bucket for {account_email} "
+                        f"(limit: {messages_per_hour} msg/hour)"
+                    )
+                else:
+                    # Fallback to default if no account provided
+                    messages_per_hour = self.default_messages_per_hour
+                    logger.debug(
+                        f"[RateLimiter] Creating bucket for {account_email} "
+                        f"(using default: {messages_per_hour} msg/hour)"
+                    )
+
+                refill_rate = messages_per_hour / 3600.0
+
                 self.buckets[account_email] = TokenBucket(
-                    capacity=self.messages_per_hour,
-                    refill_rate=self.refill_rate,
+                    capacity=messages_per_hour,
+                    refill_rate=refill_rate,
                 )
             return self.buckets[account_email]
 
-    async def check_rate_limit(self, account_email: str, tokens: int = 1) -> bool:
-        """Check if account can send (non-blocking check)"""
-        bucket = await self.get_or_create_bucket(account_email)
+    async def check_rate_limit(self, account_email: str, account = None, tokens: int = 1) -> bool:
+        """
+        Check if account can send (non-blocking check)
+
+        Args:
+            account_email: Email address
+            account: AccountConfig object (optional, for per-account limits)
+            tokens: Number of tokens to check
+        """
+        bucket = await self.get_or_create_bucket(account_email, account)
         # Refill and check without waiting
         await bucket._refill()
         return bucket.tokens >= tokens
 
-    async def acquire(self, account_email: str, tokens: int = 1) -> bool:
-        """Acquire tokens for account"""
-        bucket = await self.get_or_create_bucket(account_email)
+    async def acquire(self, account_email: str, account = None, tokens: int = 1) -> bool:
+        """
+        Acquire tokens for account
+
+        Args:
+            account_email: Email address
+            account: AccountConfig object (optional, for per-account limits)
+            tokens: Number of tokens to acquire
+        """
+        bucket = await self.get_or_create_bucket(account_email, account)
         success = await bucket.acquire(tokens)
 
         if not success:
-            remaining = bucket.capacity - bucket.tokens
             logger.warning(
                 f"[RateLimiter] Rate limit exceeded for {account_email} "
-                f"(need {tokens}, have {bucket.tokens:.2f})"
+                f"(need {tokens}, have {bucket.tokens:.2f}/{bucket.capacity})"
             )
             raise RateLimitExceeded(
                 f"Rate limit exceeded for {account_email}"
