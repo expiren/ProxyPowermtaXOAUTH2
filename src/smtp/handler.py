@@ -4,7 +4,7 @@ import asyncio
 import base64
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager

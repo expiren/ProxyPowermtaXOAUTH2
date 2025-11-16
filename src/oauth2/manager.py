@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import json
 import aiohttp
 from typing import Optional, Dict, TYPE_CHECKING
 from datetime import datetime, timedelta, UTC

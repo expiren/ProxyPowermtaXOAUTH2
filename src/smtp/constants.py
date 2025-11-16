@@ -55,40 +55,15 @@ SMTP_COMMANDS = {
     'QUIT': 'QUIT',
 }
 
-# Server capabilities
-SERVER_CAPABILITIES = [
-    'AUTH LOGIN PLAIN',
-    'SIZE 104857600',  # 100MB
-    '8BITMIME',
-    'PIPELINING',
-    'ENHANCEDSTATUSCODES',
-]
+# Circuit breaker defaults (used in circuit_breaker.py)
+DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5  # failures before open
+DEFAULT_CIRCUIT_BREAKER_TIMEOUT = 60  # seconds before half-open
 
-# Configuration defaults
-DEFAULT_SMTP_PORT = 2525
-DEFAULT_HOST = '127.0.0.1'
-DEFAULT_TIMEOUT = 15
-DEFAULT_MAX_CONCURRENT = 100
-DEFAULT_GLOBAL_CONCURRENCY = 100
-
-# Token refresh defaults
-TOKEN_REFRESH_BUFFER_SECONDS = 300  # 5 minutes
-TOKEN_REFRESH_TIMEOUT = 10
-
-# Retry policy defaults
+# Retry policy defaults (used in retry.py)
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_FACTOR = 2
 DEFAULT_RETRY_MAX_DELAY = 30
 
-# Rate limiting defaults
-DEFAULT_RATE_LIMIT_BUCKET_SIZE = 100
-DEFAULT_RATE_LIMIT_REFILL_RATE = 10  # tokens per second
-
-# Connection pool defaults
+# Connection pool defaults (used in connection_pool.py)
 DEFAULT_POOL_MIN_SIZE = 5
 DEFAULT_POOL_MAX_SIZE = 20
-DEFAULT_POOL_TIMEOUT = 5
-
-# Circuit breaker defaults
-DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5  # failures before open
-DEFAULT_CIRCUIT_BREAKER_TIMEOUT = 60  # seconds before half-open
