@@ -64,13 +64,18 @@ class UpstreamRelay:
         dry_run: bool = False
     ) -> Tuple[bool, int, str]:
         """
-        Send message via upstream SMTP server using XOAUTH2 (Fully Async)
+        Send message via upstream SMTP server using XOAUTH2 with connection reuse
+
+        NOTE: PowerMTA sends one message per SMTP conversation:
+        - Different messages have different content
+        - Each message has ONE recipient (len(rcpt_tos) == 1)
+        - Connection reuse happens across sequential messages from SAME sender account
 
         Args:
             account: Account configuration
-            message_data: Raw message bytes
+            message_data: Raw message bytes (unique per message)
             mail_from: Sender email
-            rcpt_tos: List of recipients
+            rcpt_tos: List of recipients (typically 1 recipient per message)
             dry_run: If True, test connection but don't send
 
         Returns:
@@ -86,7 +91,6 @@ class UpstreamRelay:
                 return (False, 454, "4.7.0 Temporary service unavailable")
 
             # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
-            # Using \1 literal (octal escape for byte 0x01)
             xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
 
             logger.debug(
@@ -101,10 +105,10 @@ class UpstreamRelay:
 
             logger.info(
                 f"[{account.email}] Relaying to {smtp_host}:{smtp_port} "
-                f"({account.provider.upper()}) - {len(rcpt_tos)} recipients"
+                f"({account.provider.upper()}) - {len(rcpt_tos)} recipient(s)"
             )
 
-            # Acquire connection from pool (async, reuses existing authenticated connections!)
+            # Acquire connection from pool (reuses existing authenticated connections!)
             connection = await self.connection_pool.acquire(
                 account_email=account.email,
                 smtp_host=smtp_host,
@@ -116,12 +120,8 @@ class UpstreamRelay:
                 # Dry-run mode
                 if dry_run:
                     logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
-                    # Release connection back to pool
                     await self.connection_pool.release(account.email, connection, increment_count=False)
                     return (True, 250, "2.0.0 OK (dry-run)")
-
-                # Send message (fully async!)
-                logger.info(f"[{account.email}] Sending message to {rcpt_tos}...")
 
                 # Convert message_data to string if needed
                 if isinstance(message_data, bytes):
@@ -129,49 +129,96 @@ class UpstreamRelay:
                 else:
                     message_str = message_data
 
-                # Send with aiosmtplib (fully async, no blocking!)
-                errors, response = await connection.sendmail(
-                    mail_from,
-                    rcpt_tos,
-                    message_str
-                )
+                # ✅ USE LOW-LEVEL SMTP COMMANDS FOR CONNECTION REUSE
+                # This keeps connection state clean and ready for next message
+                logger.info(f"[{account.email}] Sending message to {rcpt_tos[0] if rcpt_tos else 'unknown'}...")
 
-                # Release connection back to pool
+                # MAIL FROM
+                code, msg = await connection.mail(mail_from)
+                if code not in (250, 251):
+                    logger.error(f"[{account.email}] MAIL FROM rejected: {code} {msg}")
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    # Close bad connection
+                    try:
+                        await connection.quit()
+                    except:
+                        pass
+                    return (False, code, msg)
+
+                # RCPT TO (for each recipient - typically just one)
+                rejected_recipients = []
+                for rcpt in rcpt_tos:
+                    code, msg = await connection.rcpt(rcpt)
+                    if code not in (250, 251):
+                        logger.warning(f"[{account.email}] RCPT TO {rcpt} rejected: {code} {msg}")
+                        rejected_recipients.append(rcpt)
+
+                # If all recipients rejected, fail
+                if rejected_recipients and len(rejected_recipients) == len(rcpt_tos):
+                    logger.error(f"[{account.email}] All recipients rejected")
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    # Close bad connection
+                    try:
+                        await connection.quit()
+                    except:
+                        pass
+                    return (False, 553, "5.1.3 All recipients rejected")
+
+                # DATA (send message body)
+                code, msg = await connection.data(message_str)
+                if code != 250:
+                    logger.error(f"[{account.email}] DATA rejected: {code} {msg}")
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    # Close bad connection
+                    try:
+                        await connection.quit()
+                    except:
+                        pass
+                    return (False, code, msg)
+
+                # ✅ SUCCESS - Return connection to pool (KEEP ALIVE for reuse)
+                # Connection is now in clean state, ready for next MAIL FROM command
                 await self.connection_pool.release(account.email, connection, increment_count=True)
 
-                # Check for rejected recipients
-                if errors:
-                    logger.warning(f"[{account.email}] Some recipients rejected: {errors}")
-                    rejected_str = ", ".join([f"{addr}" for addr in errors.keys()])
-                    return (False, 553, f"5.1.3 Some recipients rejected: {rejected_str[:50]}")
-
-                # Success
                 duration = time.time() - start_time
                 Metrics.messages_total.labels(result='success').inc()
                 Metrics.messages_duration_seconds.observe(duration)
 
                 logger.info(
-                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipients "
+                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipient(s) "
                     f"({duration:.3f}s)"
                 )
+
+                if rejected_recipients:
+                    rejected_str = ", ".join(rejected_recipients[:3])
+                    return (True, 250, f"2.0.0 OK (some recipients rejected: {rejected_str})")
+
                 return (True, 250, "2.0.0 OK")
 
             except asyncio.TimeoutError:
-                # Release connection on error
+                # Timeout - close connection, don't reuse
+                logger.error(f"[{account.email}] SMTP timeout")
                 await self.connection_pool.release(account.email, connection, increment_count=False)
+                try:
+                    await connection.quit()
+                except:
+                    pass
 
                 duration = time.time() - start_time
-                logger.error(f"[{account.email}] SMTP timeout")
                 Metrics.messages_total.labels(result='failure').inc()
                 Metrics.messages_duration_seconds.observe(duration)
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
-                # Release connection on error
+                # Error - close connection, don't reuse
+                logger.error(f"[{account.email}] SMTP send error: {e}")
                 await self.connection_pool.release(account.email, connection, increment_count=False)
+                try:
+                    await connection.quit()
+                except:
+                    pass
 
                 duration = time.time() - start_time
-                logger.error(f"[{account.email}] SMTP send error: {e}")
                 Metrics.messages_total.labels(result='failure').inc()
                 Metrics.messages_duration_seconds.observe(duration)
 

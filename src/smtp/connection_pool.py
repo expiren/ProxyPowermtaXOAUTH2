@@ -55,6 +55,7 @@ class SMTPConnectionPool:
         # - filter/remove: O(n) but we batch operations
         self.pools: Dict[str, deque[PooledConnection]] = {}
         self.locks: Dict[str, asyncio.Lock] = {}
+        self.semaphores: Dict[str, asyncio.Semaphore] = {}  # ✅ Fair queueing with semaphores
         # REMOVED: global_lock (was causing 70-90% throughput loss!)
         # Now using lightweight dict lock ONLY for dict modifications (microseconds)
         # Per-account locks handle actual pool operations (no global serialization)
@@ -93,124 +94,131 @@ class SMTPConnectionPool:
         Returns:
             Connected and authenticated SMTP connection
         """
-        # Get or create lock for this account (dict lock held for microseconds only!)
+        # Get or create lock and semaphore for this account (dict lock held for microseconds only!)
         if account_email not in self.locks:
             async with self._dict_lock:
                 # Double-check after acquiring lock (race condition)
                 if account_email not in self.locks:
                     self.locks[account_email] = asyncio.Lock()
                     self.pools[account_email] = deque()  # Use deque, not list
+                    # ✅ Semaphore for fair queueing when all connections busy
+                    self.semaphores[account_email] = asyncio.Semaphore(self.max_connections_per_account)
 
         lock = self.locks[account_email]
+        semaphore = self.semaphores[account_email]
 
-        async with lock:
-            pool = self.pools[account_email]
+        # ✅ Acquire semaphore first (fair queueing, no busy-wait!)
+        # This automatically waits if max_connections_per_account already acquired
+        async with semaphore:
+            async with lock:
+                pool = self.pools[account_email]
 
-            # Collect bad connections to remove (more efficient than removing during iteration)
-            to_remove = []
+                # Collect bad connections to remove (more efficient than removing during iteration)
+                to_remove = []
 
-            # Try to find available connection from pool
-            for pooled in pool:
-                if pooled.is_busy:
-                    continue
+                # Try to find available connection from pool
+                for pooled in pool:
+                    if pooled.is_busy:
+                        continue
 
-                # Check if connection should be removed
-                if pooled.is_expired(self.connection_max_age):
-                    logger.debug(f"[Pool] Connection expired for {account_email}")
-                    await self._close_connection(pooled)
-                    to_remove.append(pooled)
-                    continue
+                    # Check if connection should be removed
+                    if pooled.is_expired(self.connection_max_age):
+                        logger.debug(f"[Pool] Connection expired for {account_email}")
+                        await self._close_connection(pooled)
+                        to_remove.append(pooled)
+                        continue
 
-                if pooled.is_idle_too_long(self.connection_idle_timeout):
-                    logger.debug(f"[Pool] Connection idle too long for {account_email}")
-                    await self._close_connection(pooled)
-                    to_remove.append(pooled)
-                    continue
+                    if pooled.is_idle_too_long(self.connection_idle_timeout):
+                        logger.debug(f"[Pool] Connection idle too long for {account_email}")
+                        await self._close_connection(pooled)
+                        to_remove.append(pooled)
+                        continue
 
-                # Check if connection used too many times
-                if pooled.message_count >= self.max_messages_per_connection:
+                    # Check if connection used too many times
+                    if pooled.message_count >= self.max_messages_per_connection:
+                        logger.debug(
+                            f"[Pool] Connection reached max messages ({pooled.message_count}) "
+                            f"for {account_email}"
+                        )
+                        await self._close_connection(pooled)
+                        to_remove.append(pooled)
+                        continue
+
+                    # REMOVED: NOOP health check (caused 50k+ extra SMTP commands per minute!)
+                    # Connections will fail fast on actual send if broken - much more efficient
+                    # than proactively checking every reuse
+
+                    # Connection is good - reuse it
+                    pooled.is_busy = True
+                    pooled.last_used = datetime.now(UTC)
+                    self.stats['pool_hits'] += 1
+                    self.stats['connections_reused'] += 1
+
                     logger.debug(
-                        f"[Pool] Connection reached max messages ({pooled.message_count}) "
-                        f"for {account_email}"
+                        f"[Pool] Reusing connection for {account_email} "
+                        f"(msg_count={pooled.message_count}, age={int((datetime.now(UTC) - pooled.created_at).total_seconds())}s)"
                     )
-                    await self._close_connection(pooled)
-                    to_remove.append(pooled)
-                    continue
 
-                # REMOVED: NOOP health check (caused 50k+ extra SMTP commands per minute!)
-                # Connections will fail fast on actual send if broken - much more efficient
-                # than proactively checking every reuse
+                    # Remove bad connections (one pass instead of multiple remove() calls)
+                    if to_remove:
+                        self.pools[account_email] = deque(p for p in pool if p not in to_remove)
 
-                # Connection is good - reuse it
-                pooled.is_busy = True
-                pooled.last_used = datetime.now(UTC)
-                self.stats['pool_hits'] += 1
-                self.stats['connections_reused'] += 1
+                    return pooled.connection
 
-                logger.debug(
-                    f"[Pool] Reusing connection for {account_email} "
-                    f"(msg_count={pooled.message_count}, age={int((datetime.now(UTC) - pooled.created_at).total_seconds())}s)"
-                )
-
-                # Remove bad connections (one pass instead of multiple remove() calls)
+                # Remove bad connections if we didn't find a good one (one pass filter)
                 if to_remove:
                     self.pools[account_email] = deque(p for p in pool if p not in to_remove)
 
-                return pooled.connection
+                # No available connection - create new one
+                self.stats['pool_misses'] += 1
 
-            # Remove bad connections if we didn't find a good one (one pass filter)
-            if to_remove:
-                self.pools[account_email] = deque(p for p in pool if p not in to_remove)
+                # Check pool size limit (use updated pool reference)
+                pool = self.pools[account_email]
+                if len(pool) >= self.max_connections_per_account:
+                    # Find and close oldest non-busy connection
+                    non_busy = [p for p in pool if not p.is_busy]
+                    if non_busy:
+                        oldest = min(non_busy, key=lambda p: p.created_at)
+                        logger.debug(f"[Pool] Closing oldest connection for {account_email}")
+                        await self._close_connection(oldest)
+                        # Filter out the oldest connection (O(n) but single pass)
+                        self.pools[account_email] = deque(p for p in pool if p is not oldest)
+                    else:
+                        # ✅ REMOVED: Busy-wait anti-pattern (sleep + recursive retry)
+                        # Semaphore handles queueing automatically - if we get here, it's a logic error
+                        logger.error(
+                            f"[Pool] All {len(pool)} connections busy for {account_email} "
+                            f"(should not happen with semaphore!)"
+                        )
+                        # This should never happen with semaphore, but handle gracefully
+                        raise Exception(f"Pool exhausted for {account_email} despite semaphore")
 
-            # No available connection - create new one
-            self.stats['pool_misses'] += 1
+                # Create new connection
+                connection = await self._create_connection(
+                    account_email,
+                    smtp_host,
+                    smtp_port,
+                    xoauth2_string
+                )
 
-            # Check pool size limit (use updated pool reference)
-            pool = self.pools[account_email]
-            if len(pool) >= self.max_connections_per_account:
-                # Find and close oldest non-busy connection
-                non_busy = [p for p in pool if not p.is_busy]
-                if non_busy:
-                    oldest = min(non_busy, key=lambda p: p.created_at)
-                    logger.debug(f"[Pool] Closing oldest connection for {account_email}")
-                    await self._close_connection(oldest)
-                    # Filter out the oldest connection (O(n) but single pass)
-                    self.pools[account_email] = deque(p for p in pool if p is not oldest)
-                else:
-                    # All connections busy - wait a bit and retry
-                    logger.warning(
-                        f"[Pool] All {len(pool)} connections busy for {account_email}, waiting..."
-                    )
-                    await asyncio.sleep(0.1)
-                    # Release lock and retry
-                    return await self.acquire(account_email, smtp_host, smtp_port, xoauth2_string)
+                # Add to pool
+                pooled = PooledConnection(
+                    connection=connection,
+                    account_email=account_email,
+                    created_at=datetime.now(UTC),
+                    last_used=datetime.now(UTC),
+                    message_count=0,
+                    is_busy=True
+                )
+                pool.append(pooled)
 
-            # Create new connection
-            connection = await self._create_connection(
-                account_email,
-                smtp_host,
-                smtp_port,
-                xoauth2_string
-            )
+                self.stats['connections_created'] += 1
+                logger.info(
+                    f"[Pool] Created new connection for {account_email} "
+                    f"(pool_size={len(pool)}/{self.max_connections_per_account})"
+                )
 
-            # Add to pool
-            pooled = PooledConnection(
-                connection=connection,
-                account_email=account_email,
-                created_at=datetime.now(UTC),
-                last_used=datetime.now(UTC),
-                message_count=0,
-                is_busy=True
-            )
-            pool.append(pooled)
-
-            self.stats['connections_created'] += 1
-            logger.info(
-                f"[Pool] Created new connection for {account_email} "
-                f"(pool_size={len(pool)}/{self.max_connections_per_account})"
-            )
-
-            return connection
+                return connection
 
     async def release(self, account_email: str, connection: aiosmtplib.SMTP, increment_count: bool = True):
         """

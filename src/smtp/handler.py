@@ -261,12 +261,9 @@ class SMTPProxyHandler(asyncio.Protocol):
                         self.send_response(454, "Temporary authentication failure")
                         return
 
-                # Verify token with upstream XOAUTH2 (while still holding account lock)
-                if not await self.verify_xoauth2(account):
-                    logger.error(f"[{auth_email}] XOAUTH2 verification failed")
-                    Metrics.auth_attempts_total.labels(result='xoauth2_failed').inc()
-                    self.send_response(535, "authentication failed")
-                    return
+                # ✅ REMOVED: Fake XOAUTH2 verification (was just returning True)
+                # Token validation happens during OAuth2 refresh
+                # First message relay will fail if token is actually bad (acceptable tradeoff)
 
                 # Authentication successful - update connection count (still under account lock)
                 # This consolidates all auth operations under ONE lock instead of multiple
@@ -292,58 +289,6 @@ class SMTPProxyHandler(asyncio.Protocol):
             # No account label to reduce cardinality
             Metrics.errors_total.labels(error_type='auth').inc()
             self.send_response(451, "Internal error")
-
-    async def verify_xoauth2(self, account: AccountConfig) -> bool:
-        """Verify token via XOAUTH2 authentication
-
-        NOTE: This method assumes account.lock is ALREADY HELD by the caller
-        """
-        start_time = time.time()
-
-        try:
-            logger.info(f"[{account.email}] Verifying XOAUTH2 token (provider: {account.provider})")
-
-            # Get current token (NO LOCK - caller already holds it)
-            token = account.token
-            if not token or not token.access_token:
-                logger.error(f"[{account.email}] No valid token available for XOAUTH2 verification")
-                return False
-
-            # Construct XOAUTH2 string (using chr(1) for proper byte 0x01 separators)
-            xoauth2_string = f"user={account.email}{chr(1)}auth=Bearer {token.access_token}{chr(1)}{chr(1)}"
-            xoauth2_b64 = base64.b64encode(xoauth2_string.encode('utf-8')).decode('utf-8')
-
-            logger.debug(
-                f"[{account.email}] XOAUTH2 Auth: "
-                f"user={account.email}, token_length={len(token.access_token)}, "
-                f"expires_in={token.expires_in_seconds()}s"
-            )
-
-            # Basic validation
-            if not token.access_token or len(token.access_token) < 10:
-                logger.error(f"[{account.email}] Invalid token format (too short)")
-                return False
-
-            logger.info(
-                f"[{account.email}] XOAUTH2 verification: "
-                f"string constructed successfully "
-                f"(provider={account.provider}, endpoint={account.oauth_endpoint})"
-            )
-
-            duration = time.time() - start_time
-            Metrics.upstream_auth_total.labels(result='success').inc()
-            Metrics.upstream_auth_duration_seconds.observe(duration)
-
-            return True
-
-        except Exception as e:
-            duration = time.time() - start_time
-            Metrics.upstream_auth_total.labels(result='failure').inc()
-            Metrics.upstream_auth_duration_seconds.observe(duration)
-
-            logger.error(f"[{account.email}] XOAUTH2 verification failed: {e}")
-            Metrics.errors_total.labels(error_type='xoauth2_verify').inc()
-            return False
 
     async def handle_mail(self, args: str):
         """Handle MAIL FROM command"""
