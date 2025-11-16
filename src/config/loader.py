@@ -127,7 +127,7 @@ class ConfigLoader:
 
     @staticmethod
     def validate_account(account: AccountConfig) -> bool:
-        """Validate account configuration"""
+        """Validate account configuration with provider-specific checks"""
         if not account.email or '@' not in account.email:
             raise ConfigError(f"Invalid email: {account.email}")
 
@@ -136,5 +136,18 @@ class ConfigLoader:
 
         if not account.client_id or not account.refresh_token:
             raise ConfigError(f"Missing OAuth2 credentials for {account.email}")
+
+        # Validate oauth_token_url format (must be HTTPS URL)
+        if not account.oauth_token_url or not account.oauth_token_url.startswith('https://'):
+            raise ConfigError(
+                f"Invalid oauth_token_url for {account.email}: "
+                f"must be a valid HTTPS URL (got: {account.oauth_token_url or 'empty'})"
+            )
+
+        # Provider-specific validation
+        if account.is_gmail and not account.client_secret:
+            raise ConfigError(
+                f"Gmail account {account.email} requires non-empty client_secret for OAuth2 token refresh"
+            )
 
         return True
