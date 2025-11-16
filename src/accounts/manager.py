@@ -6,7 +6,6 @@ from typing import Dict, Optional
 from pathlib import Path
 
 from src.accounts.models import AccountConfig
-from src.config.loader import ConfigLoader
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -27,6 +26,7 @@ class AccountManager:
 
     async def load(self) -> int:
         """Load accounts from config file with proxy config merging"""
+        from src.config.loader import ConfigLoader  # Import here to avoid circular dependency
         # ✅ Pass proxy_config to ConfigLoader
         accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
@@ -78,6 +78,7 @@ class AccountManager:
 
     async def reload(self) -> int:
         """Reload accounts from config (hot-reload)"""
+        from src.config.loader import ConfigLoader  # Import here to avoid circular dependency
         try:
             # ✅ Pass proxy_config to ConfigLoader
             accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
