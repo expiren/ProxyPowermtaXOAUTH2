@@ -30,10 +30,17 @@ class AccountConfig:
     token: Optional['OAuthToken'] = None
     messages_this_hour: int = field(default=0)
     concurrent_messages: int = field(default=0)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    active_connections: int = field(default=0)  # Track active authenticated connections
+    # IMPROVED: Lock created in __post_init__ for durability (not default_factory)
+    lock: Optional[asyncio.Lock] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
-        """Initialize token if not present"""
+        """Initialize token and lock if not present"""
+        # Create lock in __post_init__ (more durable than default_factory on hot-reload)
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+
+        # Initialize token if not present
         if self.token is None:
             from src.oauth2.models import OAuthToken
             self.token = OAuthToken(

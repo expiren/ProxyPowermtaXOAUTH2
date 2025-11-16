@@ -39,7 +39,7 @@ class AccountManager:
 
     async def get_by_email(self, email: str) -> Optional[AccountConfig]:
         """
-        Get account by email (cached)
+        Get account by email (cached, race-condition safe)
 
         Args:
             email: Email address
@@ -47,27 +47,28 @@ class AccountManager:
         Returns:
             AccountConfig or None if not found
         """
-        # Try cache first (fast path)
-        if email in self.email_cache:
-            return self.email_cache[email]
+        # Try cache first (lock-free - dict.get is atomic)
+        cached = self.email_cache.get(email)
+        if cached is not None:
+            return cached
 
-        # Try main store
-        async with self.lock:
-            if email in self.accounts:
-                self.email_cache[email] = self.accounts[email]
-                return self.accounts[email]
+        # Cache miss - try main store (lock-free read - safe for read-mostly workload)
+        # Note: Python dict reads are atomic (GIL protected), accounts rarely change
+        account = self.accounts.get(email)
+        if account:
+            # Populate cache (atomic write)
+            self.email_cache[email] = account
+            return account
 
         return None
 
     async def get_by_id(self, account_id: str) -> Optional[AccountConfig]:
-        """Get account by ID"""
-        async with self.lock:
-            return self.accounts_by_id.get(account_id)
+        """Get account by ID (lock-free read)"""
+        return self.accounts_by_id.get(account_id)
 
     async def get_all(self) -> list[AccountConfig]:
-        """Get all accounts"""
-        async with self.lock:
-            return list(self.accounts.values())
+        """Get all accounts (lock-free read)"""
+        return list(self.accounts.values())
 
     async def verify_account(self, email: str) -> bool:
         """Verify account exists"""

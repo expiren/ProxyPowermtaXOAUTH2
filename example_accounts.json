@@ -8,7 +8,7 @@
     "client_id": "YOUR_GMAIL_CLIENT_ID.apps.googleusercontent.com",
     "client_secret": "YOUR_GMAIL_CLIENT_SECRET_XXXXX",
     "refresh_token": "YOUR_GMAIL_REFRESH_TOKEN_XXXXX",
-    "oauth_endpoint": "https://oauth2.googleapis.com",
+    "oauth_endpoint": "smtp.gmail.com:587",
     "oauth_token_url": "https://oauth2.googleapis.com/token",
     "max_concurrent_messages": 10,
     "max_messages_per_hour": 10000
@@ -22,7 +22,7 @@
     "client_id": "YOUR_GMAIL_CLIENT_ID_2.apps.googleusercontent.com",
     "client_secret": "YOUR_GMAIL_CLIENT_SECRET_2_XXXXX",
     "refresh_token": "YOUR_GMAIL_REFRESH_TOKEN_2_XXXXX",
-    "oauth_endpoint": "https://oauth2.googleapis.com",
+    "oauth_endpoint": "smtp.gmail.com:587",
     "oauth_token_url": "https://oauth2.googleapis.com/token",
     "max_concurrent_messages": 10,
     "max_messages_per_hour": 10000
@@ -36,7 +36,7 @@
     "client_id": "YOUR_OUTLOOK_CLIENT_ID_XXXXX",
     "client_secret": "YOUR_OUTLOOK_CLIENT_SECRET_XXXXX",
     "refresh_token": "YOUR_OUTLOOK_REFRESH_TOKEN_XXXXX",
-    "oauth_endpoint": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    "oauth_endpoint": "smtp.office365.com:587",
     "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     "max_concurrent_messages": 10,
     "max_messages_per_hour": 10000
@@ -50,7 +50,7 @@
     "client_id": "YOUR_OUTLOOK_CLIENT_ID_2_XXXXX",
     "client_secret": "YOUR_OUTLOOK_CLIENT_SECRET_2_XXXXX",
     "refresh_token": "YOUR_OUTLOOK_REFRESH_TOKEN_2_XXXXX",
-    "oauth_endpoint": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    "oauth_endpoint": "smtp.office365.com:587",
     "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     "max_concurrent_messages": 10,
     "max_messages_per_hour": 10000

@@ -1,14 +1,15 @@
-"""Upstream XOAUTH2 relay - sends messages to Gmail/Outlook SMTP"""
+"""Upstream XOAUTH2 relay - sends messages to Gmail/Outlook SMTP (Fully Async with Connection Pooling)"""
 
 import asyncio
-import smtplib
 import logging
 import base64
-from typing import Optional, List, Tuple, Callable, Any
+import time
+from typing import Optional, List, Tuple
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
 from src.metrics.collector import MetricsCollector
+from src.smtp.connection_pool import SMTPConnectionPool
 from src.smtp.exceptions import (
     SMTPAuthenticationError, SMTPConnectionError,
     SMTPRelayError, InvalidRecipient, SMTPTimeout
@@ -21,10 +22,38 @@ Metrics = MetricsCollector
 
 
 class UpstreamRelay:
-    """Handles relay of messages to upstream SMTP servers via XOAUTH2"""
+    """Handles relay of messages to upstream SMTP servers via XOAUTH2 (Fully Async)"""
 
-    def __init__(self, oauth_manager: OAuth2Manager):
+    def __init__(
+        self,
+        oauth_manager: OAuth2Manager,
+        max_connections_per_account: int = 50,
+        max_messages_per_connection: int = 100
+    ):
         self.oauth_manager = oauth_manager
+
+        # Create SMTP connection pool (fully async, no thread pool needed!)
+        self.connection_pool = SMTPConnectionPool(
+            max_connections_per_account=max_connections_per_account,
+            max_messages_per_connection=max_messages_per_connection,
+            connection_max_age=300,      # 5 minutes
+            connection_idle_timeout=60   # 1 minute
+        )
+
+        # Start cleanup task
+        self.cleanup_task = None
+
+        logger.info(
+            f"[UpstreamRelay] Initialized with connection pooling "
+            f"(max_conn_per_account={max_connections_per_account}, "
+            f"max_msg_per_conn={max_messages_per_connection})"
+        )
+
+    async def initialize(self):
+        """Initialize and start background tasks"""
+        # Start connection cleanup task
+        self.cleanup_task = asyncio.create_task(self.connection_pool.cleanup_idle_connections())
+        logger.info("[UpstreamRelay] Started connection pool cleanup task")
 
     async def send_message(
         self,
@@ -35,7 +64,7 @@ class UpstreamRelay:
         dry_run: bool = False
     ) -> Tuple[bool, int, str]:
         """
-        Send message via upstream SMTP server using XOAUTH2
+        Send message via upstream SMTP server using XOAUTH2 (Fully Async)
 
         Args:
             account: Account configuration
@@ -47,7 +76,6 @@ class UpstreamRelay:
         Returns:
             (success: bool, smtp_code: int, message: str)
         """
-        import time
         start_time = time.time()
 
         try:
@@ -57,14 +85,12 @@ class UpstreamRelay:
                 logger.error(f"[{account.email}] Failed to get OAuth2 token")
                 return (False, 454, "4.7.0 Temporary service unavailable")
 
-            # Build XOAUTH2 auth string
-            # IMPORTANT: Return the RAW XOAUTH2 string, NOT base64 encoded
-            # smtplib.auth() handles base64 encoding internally
-            # Using \1 literal (octal escape for byte 0x01), not chr(1)
+            # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
+            # Using \1 literal (octal escape for byte 0x01)
             xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
 
             logger.debug(
-                f"[{account.email}] XOAUTH2 string: "
+                f"[{account.email}] XOAUTH2 string prepared: "
                 f"user={mail_from}, token_length={len(token.access_token)}, "
                 f"expires_in={token.expires_in_seconds()}s"
             )
@@ -78,95 +104,110 @@ class UpstreamRelay:
                 f"({account.provider.upper()}) - {len(rcpt_tos)} recipients"
             )
 
-            # Connect and send in executor
-            loop = asyncio.get_running_loop()
+            # Acquire connection from pool (async, reuses existing authenticated connections!)
+            connection = await self.connection_pool.acquire(
+                account_email=account.email,
+                smtp_host=smtp_host,
+                smtp_port=smtp_port,
+                xoauth2_string=xoauth2_string
+            )
 
-            def connect_and_send():
-                """Blocking SMTP operations"""
-                try:
-                    # Connect
-                    server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
-                    logger.debug(f"[{account.email}] Connected to {smtp_host}:{smtp_port}")
+            try:
+                # Dry-run mode
+                if dry_run:
+                    logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
+                    # Release connection back to pool
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    return (True, 250, "2.0.0 OK (dry-run)")
 
-                    # EHLO
-                    code, msg = server.ehlo(name=mail_from.split('@')[1])
-                    logger.debug(f"[{account.email}] EHLO: {code}")
+                # Send message (fully async!)
+                logger.info(f"[{account.email}] Sending message to {rcpt_tos}...")
 
-                    # STARTTLS
-                    try:
-                        code, msg = server.starttls()
-                        logger.debug(f"[{account.email}] STARTTLS: {code}")
-                    except smtplib.SMTPNotSupportedError:
-                        logger.warning(f"[{account.email}] STARTTLS not supported")
+                # Convert message_data to string if needed
+                if isinstance(message_data, bytes):
+                    message_str = message_data.decode('utf-8', errors='replace')
+                else:
+                    message_str = message_data
 
-                    # EHLO again
-                    code, msg = server.ehlo(name=mail_from.split('@')[1])
-                    logger.debug(f"[{account.email}] EHLO after TLS: {code}")
+                # Send with aiosmtplib (fully async, no blocking!)
+                errors, response = await connection.sendmail(
+                    mail_from,
+                    rcpt_tos,
+                    message_str
+                )
 
-                    # AUTH XOAUTH2
-                    logger.info(f"[{account.email}] Authenticating with XOAUTH2...")
-                    try:
-                        # Return the RAW XOAUTH2 string, smtplib.auth() handles base64 encoding internally
-                        auth_callback: Callable[..., str] = lambda: xoauth2_string  # type: ignore
-                        code, msg = server.auth('XOAUTH2', auth_callback)  # type: ignore
-                        logger.info(f"[{account.email}] XOAUTH2 auth successful: {code}")
-                    except smtplib.SMTPAuthenticationError as e:
-                        logger.error(f"[{account.email}] XOAUTH2 auth failed: {e}")
-                        server.quit()
-                        return (False, 454, "4.7.0 Authentication failed")
+                # Release connection back to pool
+                await self.connection_pool.release(account.email, connection, increment_count=True)
 
-                    # Dry-run mode
-                    if dry_run:
-                        logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
-                        server.quit()
-                        return (True, 250, "2.0.0 OK (dry-run)")
+                # Check for rejected recipients
+                if errors:
+                    logger.warning(f"[{account.email}] Some recipients rejected: {errors}")
+                    rejected_str = ", ".join([f"{addr}" for addr in errors.keys()])
+                    return (False, 553, f"5.1.3 Some recipients rejected: {rejected_str[:50]}")
 
-                    # Send message
-                    logger.info(f"[{account.email}] Sending message to {rcpt_tos}...")
-                    rejected = server.sendmail(mail_from, rcpt_tos, message_data)
+                # Success
+                duration = time.time() - start_time
+                Metrics.messages_total.labels(result='success').inc()
+                Metrics.messages_duration_seconds.observe(duration)
 
-                    if rejected:
-                        logger.warning(f"[{account.email}] Recipients rejected: {rejected}")
-                        rejected_str = ", ".join([f"{addr}: {code}" for addr, (code, msg) in rejected.items()])
-                        server.quit()
-                        return (False, 553, f"5.1.3 Some recipients rejected: {rejected_str[:50]}")
+                logger.info(
+                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipients "
+                    f"({duration:.3f}s)"
+                )
+                return (True, 250, "2.0.0 OK")
 
-                    logger.info(f"[{account.email}] Message sent to {len(rcpt_tos)} recipients")
-                    server.quit()
-                    return (True, 250, "2.0.0 OK")
+            except asyncio.TimeoutError:
+                # Release connection on error
+                await self.connection_pool.release(account.email, connection, increment_count=False)
 
-                except smtplib.SMTPException as e:
-                    logger.error(f"[{account.email}] SMTP error: {e}")
-                    return (False, 452, "4.3.0 SMTP error")
-                except TimeoutError as e:
-                    logger.error(f"[{account.email}] Connection timeout: {e}")
+                duration = time.time() - start_time
+                logger.error(f"[{account.email}] SMTP timeout")
+                Metrics.messages_total.labels(result='failure').inc()
+                Metrics.messages_duration_seconds.observe(duration)
+                return (False, 450, "4.4.2 Connection timeout")
+
+            except Exception as e:
+                # Release connection on error
+                await self.connection_pool.release(account.email, connection, increment_count=False)
+
+                duration = time.time() - start_time
+                logger.error(f"[{account.email}] SMTP send error: {e}")
+                Metrics.messages_total.labels(result='failure').inc()
+                Metrics.messages_duration_seconds.observe(duration)
+
+                # Parse error for better response
+                error_str = str(e).lower()
+                if 'auth' in error_str:
+                    return (False, 454, "4.7.0 Authentication failed")
+                elif 'timeout' in error_str:
                     return (False, 450, "4.4.2 Connection timeout")
-                except ConnectionRefusedError as e:
-                    logger.error(f"[{account.email}] Connection refused: {e}")
+                elif 'refused' in error_str:
                     return (False, 450, "4.4.2 Connection refused")
-                except Exception as e:
-                    logger.error(f"[{account.email}] Unexpected error: {e}")
-                    return (False, 450, "4.4.2 Temporary failure")
-
-            # Execute in thread pool
-            result: Tuple[bool, int, str] = await loop.run_in_executor(None, connect_and_send)  # type: ignore
-            success, smtp_code, message = result
-
-            # Update metrics
-            duration = time.time() - start_time
-            if success:
-                Metrics.messages_total.labels(account=account.email, result='success').inc()
-                logger.info(f"[{account.email}] Message relayed successfully ({duration:.2f}s)")
-            else:
-                Metrics.messages_total.labels(account=account.email, result='failure').inc()
-                logger.error(f"[{account.email}] Message relay failed: {message}")
-
-            Metrics.messages_duration_seconds.labels(account=account.email).observe(duration)
-
-            return (success, smtp_code, message)
+                else:
+                    return (False, 452, "4.3.0 SMTP error")
 
         except Exception as e:
+            duration = time.time() - start_time
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
-            Metrics.messages_total.labels(account=account.email, result='failure').inc()
-            Metrics.errors_total.labels(account=account.email, error_type='relay').inc()
+            Metrics.messages_total.labels(result='failure').inc()
+            Metrics.errors_total.labels(error_type='relay').inc()
+            Metrics.messages_duration_seconds.observe(duration)
             return (False, 450, "4.4.2 Internal error")
+
+    async def shutdown(self):
+        """Shutdown relay and cleanup resources"""
+        if self.cleanup_task:
+            self.cleanup_task.cancel()
+            try:
+                await self.cleanup_task
+            except asyncio.CancelledError:
+                pass
+
+        await self.connection_pool.close_all()
+        logger.info("[UpstreamRelay] Shutdown complete")
+
+    def get_stats(self) -> dict:
+        """Get relay statistics"""
+        return {
+            'connection_pool': self.connection_pool.get_stats(),
+        }

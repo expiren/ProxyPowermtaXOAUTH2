@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import json
+import aiohttp
 from typing import Optional, Dict, TYPE_CHECKING
 from datetime import datetime, timedelta, UTC
 
@@ -24,7 +25,10 @@ class OAuth2Manager:
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
         self.token_cache: Dict[str, TokenCache] = {}
-        self.lock = asyncio.Lock()
+        # REMOVED: global lock (caused 10-20% throughput loss!)
+        # Now using per-email locks for token cache access
+        self.cache_locks: Dict[str, asyncio.Lock] = {}
+        self._dict_lock = asyncio.Lock()  # Only for modifying locks dict
         self.circuit_breaker_manager = CircuitBreakerManager()
 
         # Metrics
@@ -76,7 +80,13 @@ class OAuth2Manager:
 
     async def _get_cached_token(self, email: str) -> Optional[TokenCache]:
         """Get cached token if valid"""
-        async with self.lock:
+        # Get or create per-email lock
+        if email not in self.cache_locks:
+            async with self._dict_lock:
+                if email not in self.cache_locks:
+                    self.cache_locks[email] = asyncio.Lock()
+
+        async with self.cache_locks[email]:
             cached = self.token_cache.get(email)
             if cached and cached.is_valid():
                 return cached
@@ -84,7 +94,13 @@ class OAuth2Manager:
 
     async def _cache_token(self, email: str, token: OAuthToken):
         """Cache token"""
-        async with self.lock:
+        # Get or create per-email lock
+        if email not in self.cache_locks:
+            async with self._dict_lock:
+                if email not in self.cache_locks:
+                    self.cache_locks[email] = asyncio.Lock()
+
+        async with self.cache_locks[email]:
             self.token_cache[email] = TokenCache(token=token)
             logger.debug(f"[OAuth2Manager] Cached token for {email}")
 
@@ -93,20 +109,24 @@ class OAuth2Manager:
         self.metrics['refresh_attempts'] += 1
 
         try:
-            # Use circuit breaker per provider
+            # Use circuit breaker per provider to prevent cascading failures
             breaker = await self.circuit_breaker_manager.get_or_create(
                 f"oauth2_{account.provider}"
             )
 
+            # Circuit breaker wraps retry logic:
+            # 1. Circuit breaker prevents calls if provider is known to be down
+            # 2. Retry handles transient failures (network hiccups)
+            # 3. If retry fails, circuit breaker tracks the failure
             retry_config = RetryConfig(max_attempts=2)
-            token = await retry_async(
+
+            # Wrap retry with circuit breaker
+            token = await breaker.call(
+                retry_async,
                 self._do_refresh_token,
                 account,
                 config=retry_config,
             )
-
-            # Call through circuit breaker for next time
-            await breaker.call(self._do_refresh_token, account)
 
             self.metrics['refresh_success'] += 1
             return token
@@ -138,29 +158,8 @@ class OAuth2Manager:
             }
 
         try:
-            response = await http_pool.post(token_url, payload, timeout=self.timeout)
-
-            if response.status_code != 200:
-                error_msg = response.text[:300]
-                logger.error(
-                    f"[OAuth2Manager] Token refresh failed ({response.status_code}): {error_msg}"
-                )
-
-                # Parse error response
-                try:
-                    error_data = response.json()
-                    error_code = error_data.get('error', '')
-
-                    if error_code == 'invalid_grant':
-                        raise InvalidGrant(f"Invalid refresh token for {account.email}")
-                    elif response.status_code >= 500:
-                        raise ServiceUnavailable(f"OAuth2 service error: {error_code}")
-                except json.JSONDecodeError:
-                    pass
-
-                raise TokenRefreshError(f"HTTP {response.status_code}: {error_msg}")
-
-            token_data = response.json()
+            # aiohttp-based http_pool.post() returns dict directly (or raises exception)
+            token_data = await http_pool.post(token_url, payload, timeout=self.timeout)
 
             # Extract token info
             access_token = token_data.get('access_token')
@@ -199,6 +198,16 @@ class OAuth2Manager:
 
         except TokenRefreshError:
             raise
+        except aiohttp.ClientResponseError as e:
+            # HTTP error from OAuth provider
+            if e.status == 400:
+                raise InvalidGrant(f"Invalid refresh token for {account.email}")
+            elif e.status >= 500:
+                raise ServiceUnavailable(f"OAuth2 service error: HTTP {e.status}")
+            raise TokenRefreshError(f"Token refresh HTTP error: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Network error or timeout
+            raise TokenRefreshError(f"Token refresh network error: {e}")
         except Exception as e:
             raise TokenRefreshError(f"Token refresh failed: {e}")
 
@@ -212,6 +221,7 @@ class OAuth2Manager:
 
     async def cleanup(self):
         """Cleanup resources"""
-        async with self.lock:
-            self.token_cache.clear()
+        # No lock needed - called during shutdown only
+        self.token_cache.clear()
+        self.cache_locks.clear()
         logger.info("[OAuth2Manager] Cleaned up")

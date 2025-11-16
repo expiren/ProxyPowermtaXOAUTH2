@@ -14,17 +14,20 @@ class Settings:
     port: int = 2525
     metrics_port: int = 9090
 
-    # Performance tuning
+    # Performance tuning (high-concurrency configuration)
     global_concurrency_limit: int = 100
     max_concurrent_per_account: int = 10
     max_messages_per_hour: int = 10000
+    smtp_thread_pool_size: int = 500  # Thread pool for blocking SMTP operations
+    http_pool_connections: int = 500  # HTTP connection pool size for OAuth2
+    http_pool_maxsize: int = 500      # Maximum HTTP pool size
 
     # Timeouts
     smtp_timeout: int = 15
     oauth2_timeout: int = 10
     connection_timeout: int = 15
 
-    # Connection pooling
+    # Connection pooling (legacy settings, kept for compatibility)
     pool_min_size: int = 5
     pool_max_size: int = 20
     pool_idle_timeout: int = 300
