@@ -126,9 +126,9 @@ class OAuth2Manager:
             retry_cfg = account.get_retry_config() if account else None
             retry_config = RetryConfig(
                 max_attempts=retry_cfg.max_attempts if retry_cfg else 2,
-                initial_delay=retry_cfg.initial_delay_ms / 1000 if retry_cfg else 1.0,
-                max_delay=retry_cfg.max_delay_ms / 1000 if retry_cfg else 10.0,
-                exponential_base=retry_cfg.exponential_base if retry_cfg else 2.0
+                backoff_factor=retry_cfg.backoff_factor if retry_cfg else 2.0,
+                max_delay=retry_cfg.max_delay_seconds if retry_cfg else 30,
+                jitter=retry_cfg.jitter_enabled if retry_cfg else True
             )
 
             # Wrap retry with circuit breaker
