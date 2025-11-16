@@ -124,15 +124,15 @@ class UpstreamRelay:
 
             # Acquire connection from pool (reuses existing authenticated connections!)
             # ✅ Pass account object for per-account connection pool settings
-            connection = await self.connection_pool.acquire(
-                account_email=account.email,
-                smtp_host=smtp_host,
-                smtp_port=smtp_port,
-                xoauth2_string=xoauth2_string,
-                account=account  # ✅ Per-account settings (max_connections, max_messages)
-            )
-
+            # ✅ Moved inside try block to ensure semaphore is always released on any exception
             try:
+                connection = await self.connection_pool.acquire(
+                    account_email=account.email,
+                    smtp_host=smtp_host,
+                    smtp_port=smtp_port,
+                    xoauth2_string=xoauth2_string,
+                    account=account  # ✅ Per-account settings (max_connections, max_messages)
+                )
                 # Dry-run mode
                 if dry_run:
                     logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
