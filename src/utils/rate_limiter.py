@@ -84,11 +84,18 @@ class RateLimiter:
                 # ✅ Get per-account rate limit config (or use default)
                 if account:
                     rate_config = account.get_rate_limiting_config()
-                    messages_per_hour = rate_config.messages_per_hour
-                    logger.info(
-                        f"[RateLimiter] Creating bucket for {account_email} "
-                        f"(limit: {messages_per_hour} msg/hour)"
-                    )
+                    if rate_config:
+                        messages_per_hour = rate_config.messages_per_hour
+                        logger.info(
+                            f"[RateLimiter] Creating bucket for {account_email} "
+                            f"(limit: {messages_per_hour} msg/hour)"
+                        )
+                    else:
+                        # Provider config not applied, use default
+                        messages_per_hour = self.default_messages_per_hour
+                        logger.warning(
+                            f"[RateLimiter] No rate config for {account_email}, using default: {messages_per_hour} msg/hour"
+                        )
                 else:
                     # Fallback to default if no account provided
                     messages_per_hour = self.default_messages_per_hour

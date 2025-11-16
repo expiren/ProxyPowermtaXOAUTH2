@@ -72,11 +72,15 @@ class ConfigLoader:
                 if proxy_config:
                     provider_config = proxy_config.get_provider_config(account.provider)
                     account.apply_provider_config(provider_config)
-                    logger.debug(
-                        f"[ConfigLoader] Applied {account.provider} config to {account.email} "
-                        f"(max_connections={account.get_connection_pool_config().max_connections_per_account}, "
-                        f"max_messages={account.get_connection_pool_config().max_messages_per_connection})"
-                    )
+                    pool_config = account.get_connection_pool_config()
+                    if pool_config:
+                        logger.debug(
+                            f"[ConfigLoader] Applied {account.provider} config to {account.email} "
+                            f"(max_connections={pool_config.max_connections_per_account}, "
+                            f"max_messages={pool_config.max_messages_per_connection})"
+                        )
+                    else:
+                        logger.warning(f"[ConfigLoader] No connection pool config for {account.email}")
 
                 accounts[account.email] = account
                 seen_ids.add(account.account_id)
