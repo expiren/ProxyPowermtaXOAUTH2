@@ -217,6 +217,7 @@ class OAuth2Manager:
 
     async def cleanup(self):
         """Cleanup resources"""
-        async with self.lock:
-            self.token_cache.clear()
+        # No lock needed - called during shutdown only
+        self.token_cache.clear()
+        self.cache_locks.clear()
         logger.info("[OAuth2Manager] Cleaned up")

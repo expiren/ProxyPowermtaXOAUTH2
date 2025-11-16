@@ -26,6 +26,11 @@ _RESPONSE_354_START_DATA = b'354 Start mail input; end with <CRLF>.<CRLF>\r\n'
 _RESPONSE_502_NOT_IMPL = b'502 Command not implemented\r\n'
 _RESPONSE_503_BAD_SEQ = b'503 Bad sequence of commands\r\n'
 
+# Pre-compiled regex patterns (performance optimization)
+# Avoids re-compiling on every MAIL/RCPT command (1666+ compilations/sec at 833 msg/sec)
+_MAIL_FROM_PATTERN = re.compile(r'FROM:<(.+?)>', re.IGNORECASE)
+_RCPT_TO_PATTERN = re.compile(r'TO:<(.+?)>', re.IGNORECASE)
+
 
 class SMTPProxyHandler(asyncio.Protocol):
     """SMTP protocol handler"""
@@ -344,7 +349,7 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.send_response(530, "authentication required")
             return
 
-        match = re.search(r'FROM:<(.+?)>', args, re.IGNORECASE)
+        match = _MAIL_FROM_PATTERN.search(args)
         if not match:
             self.send_response(501, "Syntax error")
             return
@@ -359,7 +364,7 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.send_response(503, "MAIL first")
             return
 
-        match = re.search(r'TO:<(.+?)>', args, re.IGNORECASE)
+        match = _RCPT_TO_PATTERN.search(args)
         if not match:
             self.send_response(501, "Syntax error")
             return

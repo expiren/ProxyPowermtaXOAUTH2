@@ -47,34 +47,28 @@ class AccountManager:
         Returns:
             AccountConfig or None if not found
         """
-        # Try cache first (fast path - no lock for read)
+        # Try cache first (lock-free - dict.get is atomic)
         cached = self.email_cache.get(email)
         if cached is not None:
             return cached
 
-        # Cache miss - try main store with lock
-        async with self.lock:
-            # Double-check cache after acquiring lock (another thread may have populated it)
-            if email in self.email_cache:
-                return self.email_cache[email]
-
-            # Check main store
-            if email in self.accounts:
-                account = self.accounts[email]
-                self.email_cache[email] = account
-                return account
+        # Cache miss - try main store (lock-free read - safe for read-mostly workload)
+        # Note: Python dict reads are atomic (GIL protected), accounts rarely change
+        account = self.accounts.get(email)
+        if account:
+            # Populate cache (atomic write)
+            self.email_cache[email] = account
+            return account
 
         return None
 
     async def get_by_id(self, account_id: str) -> Optional[AccountConfig]:
-        """Get account by ID"""
-        async with self.lock:
-            return self.accounts_by_id.get(account_id)
+        """Get account by ID (lock-free read)"""
+        return self.accounts_by_id.get(account_id)
 
     async def get_all(self) -> list[AccountConfig]:
-        """Get all accounts"""
-        async with self.lock:
-            return list(self.accounts.values())
+        """Get all accounts (lock-free read)"""
+        return list(self.accounts.values())
 
     async def verify_account(self, email: str) -> bool:
         """Verify account exists"""
