@@ -1,0 +1,91 @@
+{
+  "_comment": "Accounts configuration with optional per-account overrides",
+  "_version": "2.0",
+
+  "accounts": [
+    {
+      "account_id": "1",
+      "email": "sender1@domain.com",
+      "ip_address": "37.27.3.136",
+      "vmta_name": "vmta-1",
+      "provider": "gmail",
+      "client_id": "your-gmail-client-id",
+      "client_secret": "your-gmail-client-secret",
+      "refresh_token": "your-gmail-refresh-token",
+      "oauth_endpoint": "smtp.gmail.com:587",
+
+      "_comment": "This account uses default Gmail settings from config.json"
+    },
+
+    {
+      "account_id": "2",
+      "email": "sender2@domain.com",
+      "ip_address": "37.27.3.137",
+      "vmta_name": "vmta-2",
+      "provider": "gmail",
+      "client_id": "your-gmail-client-id",
+      "client_secret": "your-gmail-client-secret",
+      "refresh_token": "your-gmail-refresh-token",
+      "oauth_endpoint": "smtp.gmail.com:587",
+
+      "_comment": "This account overrides connection pool settings",
+      "connection_settings": {
+        "max_connections_per_account": 60,
+        "max_messages_per_connection": 80,
+        "connection_max_age_seconds": 900
+      },
+
+      "rate_limiting": {
+        "messages_per_hour": 15000,
+        "messages_per_minute_per_connection": 40
+      }
+    },
+
+    {
+      "account_id": "3",
+      "email": "sender3@outlook.com",
+      "ip_address": "37.27.3.138",
+      "vmta_name": "vmta-3",
+      "provider": "outlook",
+      "client_id": "your-outlook-client-id",
+      "client_secret": "",
+      "refresh_token": "your-outlook-refresh-token",
+      "oauth_endpoint": "smtp.office365.com:587",
+
+      "_comment": "This account uses default Outlook settings from config.json"
+    },
+
+    {
+      "account_id": "4",
+      "email": "vip-sender@domain.com",
+      "ip_address": "37.27.3.139",
+      "vmta_name": "vmta-vip",
+      "provider": "gmail",
+      "client_id": "your-gmail-client-id",
+      "client_secret": "your-gmail-client-secret",
+      "refresh_token": "your-gmail-refresh-token",
+      "oauth_endpoint": "smtp.gmail.com:587",
+
+      "_comment": "VIP account with aggressive settings for high throughput",
+      "connection_settings": {
+        "max_connections_per_account": 80,
+        "max_messages_per_connection": 100,
+        "connection_max_age_seconds": 1200,
+        "connection_idle_timeout_seconds": 180
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 20000,
+        "messages_per_minute_per_connection": 50,
+        "burst_size": 100
+      },
+
+      "retry": {
+        "max_attempts": 3,
+        "backoff_factor": 1.5,
+        "max_delay_seconds": 20
+      }
+    }
+  ]
+}

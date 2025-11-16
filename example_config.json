@@ -1,0 +1,145 @@
+{
+  "_comment": "XOAUTH2 Proxy Configuration - All variables are configurable here",
+  "_version": "2.0",
+
+  "global": {
+    "description": "Global proxy settings",
+
+    "concurrency": {
+      "max_concurrent_connections": 1000,
+      "global_concurrency_limit": 100,
+      "backpressure_queue_size": 1000,
+      "connection_backlog": 100
+    },
+
+    "timeouts": {
+      "oauth2_timeout": 10,
+      "smtp_timeout": 30,
+      "connection_acquire_timeout": 5
+    },
+
+    "logging": {
+      "level": "INFO",
+      "format": "json",
+      "log_rotation": true,
+      "max_log_size_mb": 100
+    }
+  },
+
+  "providers": {
+    "gmail": {
+      "description": "Gmail (smtp.gmail.com:587) settings",
+
+      "connection_pool": {
+        "max_connections_per_account": 40,
+        "max_messages_per_connection": 50,
+        "connection_max_age_seconds": 600,
+        "connection_idle_timeout_seconds": 120,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 10000,
+        "messages_per_minute_per_connection": 25,
+        "burst_size": 50
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    },
+
+    "outlook": {
+      "description": "Outlook (smtp.office365.com:587) settings",
+
+      "connection_pool": {
+        "max_connections_per_account": 30,
+        "max_messages_per_connection": 40,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 10000,
+        "messages_per_minute_per_connection": 15,
+        "burst_size": 30
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    },
+
+    "default": {
+      "description": "Default settings for unknown providers",
+
+      "connection_pool": {
+        "max_connections_per_account": 30,
+        "max_messages_per_connection": 50,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 5000,
+        "messages_per_minute_per_connection": 20,
+        "burst_size": 40
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    }
+  },
+
+  "features": {
+    "smtp_pipelining": true,
+    "connection_pooling": true,
+    "xoauth2_verification": false,
+    "backpressure_control": true,
+    "rate_limiting": true,
+    "circuit_breaker": true,
+    "metrics_enabled": true
+  },
+
+  "monitoring": {
+    "metrics_port": 9090,
+    "health_check_enabled": true,
+    "prometheus_enabled": true
+  }
+}
