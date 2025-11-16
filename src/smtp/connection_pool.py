@@ -20,6 +20,7 @@ class PooledConnection:
     last_used: datetime
     message_count: int = 0
     is_busy: bool = False
+    semaphore: Optional[asyncio.Semaphore] = None  # Track which semaphore this connection holds
 
     def is_expired(self, max_age_seconds: int = 300) -> bool:
         """Check if connection is too old (default 5 minutes)"""
@@ -99,8 +100,14 @@ class SMTPConnectionPool:
         # ✅ Get per-account settings (or use pool defaults)
         if account:
             pool_config = account.get_connection_pool_config()
-            max_conn = pool_config.max_connections_per_account
-            max_msg = pool_config.max_messages_per_connection
+            if pool_config:
+                max_conn = pool_config.max_connections_per_account
+                max_msg = pool_config.max_messages_per_connection
+            else:
+                # Provider config not applied, use pool defaults
+                logger.warning(f"[Pool] No connection pool config for {account_email}, using defaults")
+                max_conn = self.max_connections_per_account
+                max_msg = self.max_messages_per_connection
         else:
             # Fallback to pool defaults if no account provided
             max_conn = self.max_connections_per_account
@@ -121,7 +128,11 @@ class SMTPConnectionPool:
 
         # ✅ Acquire semaphore first (fair queueing, no busy-wait!)
         # This automatically waits if max_connections_per_account already acquired
-        async with semaphore:
+        # NOTE: We DON'T use 'async with' here because we want to hold the semaphore
+        # until release() is called, not just while acquiring the connection
+        await semaphore.acquire()
+
+        try:
             async with lock:
                 pool = self.pools[account_email]
 
@@ -163,6 +174,7 @@ class SMTPConnectionPool:
                     # Connection is good - reuse it
                     pooled.is_busy = True
                     pooled.last_used = datetime.now(UTC)
+                    pooled.semaphore = semaphore  # Track semaphore for this connection
                     self.stats['pool_hits'] += 1
                     self.stats['connections_reused'] += 1
 
@@ -220,7 +232,8 @@ class SMTPConnectionPool:
                     created_at=datetime.now(UTC),
                     last_used=datetime.now(UTC),
                     message_count=0,
-                    is_busy=True
+                    is_busy=True,
+                    semaphore=semaphore  # Track semaphore for this connection
                 )
                 pool.append(pooled)
 
@@ -231,6 +244,10 @@ class SMTPConnectionPool:
                 )
 
                 return connection
+        except Exception as e:
+            # If an error occurs, release the semaphore since we won't be using the connection
+            semaphore.release()
+            raise
 
     async def release(self, account_email: str, connection: aiosmtplib.SMTP, increment_count: bool = True):
         """
@@ -255,6 +272,11 @@ class SMTPConnectionPool:
                     pooled.last_used = datetime.now(UTC)
                     if increment_count:
                         pooled.message_count += 1
+
+                    # ✅ Release the semaphore now that connection is back in pool
+                    if pooled.semaphore:
+                        pooled.semaphore.release()
+                        pooled.semaphore = None  # Clear reference
 
                     logger.debug(
                         f"[Pool] Released connection for {account_email} "
@@ -324,6 +346,11 @@ class SMTPConnectionPool:
             logger.debug(f"[Pool] Closed connection for {pooled.account_email}")
         except Exception as e:
             logger.debug(f"[Pool] Error closing connection for {pooled.account_email}: {e}")
+        finally:
+            # ✅ Release semaphore if this connection was holding one
+            if pooled.semaphore:
+                pooled.semaphore.release()
+                pooled.semaphore = None
 
     async def cleanup_idle_connections(self):
         """Background task to cleanup idle connections (parallelized per account)"""
