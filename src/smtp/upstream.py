@@ -217,7 +217,6 @@ class UpstreamRelay:
                 except:
                     pass
 
-                duration = time.time() - start_time
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
@@ -228,8 +227,6 @@ class UpstreamRelay:
                     await connection.quit()
                 except:
                     pass
-
-                duration = time.time() - start_time
 
                 # Parse error for better response
                 error_str = str(e).lower()
@@ -243,7 +240,6 @@ class UpstreamRelay:
                     return (False, 452, "4.3.0 SMTP error")
 
         except Exception as e:
-            duration = time.time() - start_time
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
             return (False, 450, "4.4.2 Internal error")
 
