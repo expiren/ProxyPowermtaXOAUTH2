@@ -65,9 +65,14 @@ async def retry_async(
 
     Raises:
         Last exception if all retries exhausted
+        ValueError if max_attempts < 1
     """
     if config is None:
         config = RetryConfig()
+
+    # Validate config
+    if config.max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
 
     last_exception = None
 

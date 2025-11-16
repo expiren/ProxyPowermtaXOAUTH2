@@ -2,6 +2,7 @@
 
 import json
 import logging
+import urllib.parse
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -137,15 +138,23 @@ class ConfigLoader:
         if not account.client_id or not account.refresh_token:
             raise ConfigError(f"Missing OAuth2 credentials for {account.email}")
 
-        # Validate oauth_token_url format (must be HTTPS URL)
+        # Validate oauth_token_url format (must be HTTPS URL with hostname)
         if not account.oauth_token_url or not account.oauth_token_url.startswith('https://'):
             raise ConfigError(
                 f"Invalid oauth_token_url for {account.email}: "
                 f"must be a valid HTTPS URL (got: {account.oauth_token_url or 'empty'})"
             )
 
+        # Validate URL has hostname (not just "https://")
+        parsed_url = urllib.parse.urlparse(account.oauth_token_url)
+        if not parsed_url.netloc:
+            raise ConfigError(
+                f"Invalid oauth_token_url for {account.email}: "
+                f"missing hostname (got: {account.oauth_token_url})"
+            )
+
         # Provider-specific validation
-        if account.is_gmail and not account.client_secret:
+        if account.is_gmail and (not account.client_secret or not account.client_secret.strip()):
             raise ConfigError(
                 f"Gmail account {account.email} requires non-empty client_secret for OAuth2 token refresh"
             )

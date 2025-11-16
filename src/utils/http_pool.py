@@ -18,53 +18,56 @@ class HTTPSessionPool:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
+            cls._instance._init_lock = asyncio.Lock()
         return cls._instance
 
     async def initialize(self, max_retries: int = 3, timeout: int = 10):
-        """Initialize HTTP session with connection pooling"""
-        if self._initialized:
-            return
+        """Initialize HTTP session with connection pooling (thread-safe)"""
+        async with self._init_lock:
+            if self._initialized:
+                return
 
-        # Create connector with high concurrency settings
-        # Note: aiohttp uses connector for connection pooling
-        connector = TCPConnector(
-            limit=500,              # Total connection limit (was pool_maxsize)
-            limit_per_host=100,     # Connections per host
-            ttl_dns_cache=300,      # DNS cache TTL (5 minutes)
-            enable_cleanup_closed=True
-        )
+            # Create connector with high concurrency settings
+            # Note: aiohttp uses connector for connection pooling
+            connector = TCPConnector(
+                limit=500,              # Total connection limit (was pool_maxsize)
+                limit_per_host=100,     # Connections per host
+                ttl_dns_cache=300,      # DNS cache TTL (5 minutes)
+                enable_cleanup_closed=True
+            )
 
-        # Create timeout config
-        timeout_config = ClientTimeout(
-            total=timeout,
-            connect=5,
-            sock_read=timeout
-        )
+            # Create timeout config
+            timeout_config = ClientTimeout(
+                total=timeout,
+                connect=5,
+                sock_read=timeout
+            )
 
-        # Create aiohttp session (fully async - no thread pool needed!)
-        self.session = aiohttp.ClientSession(
-            connector=connector,
-            timeout=timeout_config,
-            raise_for_status=False  # We'll handle status codes manually
-        )
+            # Create aiohttp session (fully async - no thread pool needed!)
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout_config,
+                raise_for_status=False  # We'll handle status codes manually
+            )
 
-        self.max_retries = max_retries
-        self.timeout = timeout
-        self._initialized = True
+            self.max_retries = max_retries
+            self.timeout = timeout
+            self._initialized = True
 
-        logger.info(
-            f"[HTTPPool] Async HTTP session pool initialized "
-            f"(limit=500, limit_per_host=100, timeout={timeout}s)"
-        )
+            logger.info(
+                f"[HTTPPool] Async HTTP session pool initialized "
+                f"(limit=500, limit_per_host=100, timeout={timeout}s)"
+            )
 
     async def close(self):
-        """Close session"""
-        if hasattr(self, 'session') and self.session:
-            await self.session.close()
-            # Give time for connections to close gracefully
-            await asyncio.sleep(0.25)
-            self._initialized = False
-            logger.info("[HTTPPool] Async HTTP session closed")
+        """Close session (thread-safe)"""
+        async with self._init_lock:
+            if hasattr(self, 'session') and self.session:
+                await self.session.close()
+                # Give time for connections to close gracefully
+                await asyncio.sleep(0.25)
+                self._initialized = False
+                logger.info("[HTTPPool] Async HTTP session closed")
 
     def get_session(self) -> aiohttp.ClientSession:
         """Get HTTP session"""
