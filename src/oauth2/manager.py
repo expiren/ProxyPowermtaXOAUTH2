@@ -109,16 +109,20 @@ class OAuth2Manager:
         self.metrics['refresh_attempts'] += 1
 
         try:
-            # Use circuit breaker per provider (simplified - no double wrapping!)
+            # Use circuit breaker per provider to prevent cascading failures
             breaker = await self.circuit_breaker_manager.get_or_create(
                 f"oauth2_{account.provider}"
             )
 
-            # Call through circuit breaker with built-in retry
-            # REMOVED: Double wrapping with retry_async AND breaker.call
-            # Now just use circuit breaker which already handles retries
+            # Circuit breaker wraps retry logic:
+            # 1. Circuit breaker prevents calls if provider is known to be down
+            # 2. Retry handles transient failures (network hiccups)
+            # 3. If retry fails, circuit breaker tracks the failure
             retry_config = RetryConfig(max_attempts=2)
-            token = await retry_async(
+
+            # Wrap retry with circuit breaker
+            token = await breaker.call(
+                retry_async,
                 self._do_refresh_token,
                 account,
                 config=retry_config,

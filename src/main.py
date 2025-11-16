@@ -71,9 +71,12 @@ class Application:
             loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(shutdown_handler()))
             loop.add_signal_handler(signal.SIGHUP, lambda: logger.info("Received SIGHUP - hot reload not yet implemented"))
         else:
-            # Windows
-            signal.signal(signal.SIGTERM, lambda sig, frame: asyncio.create_task(shutdown_handler()))
-            signal.signal(signal.SIGINT, lambda sig, frame: asyncio.create_task(shutdown_handler()))
+            # Windows - signal handlers run outside event loop, use call_soon_threadsafe
+            def windows_signal_handler(sig, frame):
+                loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown_handler()))
+
+            signal.signal(signal.SIGTERM, windows_signal_handler)
+            signal.signal(signal.SIGINT, windows_signal_handler)
 
     async def shutdown(self):
         """Shutdown application"""

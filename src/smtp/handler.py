@@ -92,8 +92,8 @@ class SMTPProxyHandler(asyncio.Protocol):
             # Decrement active connections count (unified tracking in account object)
             if self.current_account.active_connections > 0:
                 self.current_account.active_connections -= 1
-                # Update global active connections gauge (no account label to reduce cardinality)
-                Metrics.smtp_connections_active.set(self.current_account.active_connections)
+                # Decrement global active connections gauge
+                Metrics.smtp_connections_active.dec()
 
     def data_received(self, data):
         """Data received from client"""
@@ -250,8 +250,10 @@ class SMTPProxyHandler(asyncio.Protocol):
 
             # Check and refresh token if needed (consolidated under account lock)
             async with account.lock:
-                if account.token.is_expired():
-                    logger.info(f"[{auth_email}] Token expired, refreshing")
+                # Defensive check: handle None token or expired token
+                if account.token is None or account.token.is_expired():
+                    token_status = 'missing' if account.token is None else 'expired'
+                    logger.info(f"[{auth_email}] Token {token_status}, refreshing")
                     token = await self.oauth_manager.get_or_refresh_token(account, force_refresh=True)
                     if not token:
                         logger.error(f"[{auth_email}] Token refresh failed")
@@ -270,8 +272,8 @@ class SMTPProxyHandler(asyncio.Protocol):
                 # This consolidates all auth operations under ONE lock instead of multiple
                 # Unified tracking: use account.active_connections instead of separate dict
                 account.active_connections += 1
-                # Update global active connections gauge (no account label to reduce cardinality)
-                Metrics.smtp_connections_active.set(account.active_connections)
+                # Increment global active connections gauge
+                Metrics.smtp_connections_active.inc()
 
             # Set state outside of lock
             self.current_account = account
@@ -387,9 +389,8 @@ class SMTPProxyHandler(asyncio.Protocol):
         # Increment concurrency counter
         async with self.current_account.lock:
             self.current_account.concurrent_messages += 1
-            # Update global concurrent messages gauge (no account label to reduce cardinality)
-            # Note: This is approximate as we don't track all accounts here, but good enough for monitoring
-            Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
+            # Increment global concurrent messages gauge
+            Metrics.concurrent_messages.inc()
 
         logger.info(f"[{self.current_account.email}] DATA: {len(self.rcpt_tos)} recipients")
         self.send_response(354, "Start mail input; end with <CRLF>.<CRLF>")
@@ -413,8 +414,8 @@ class SMTPProxyHandler(asyncio.Protocol):
             # Update concurrency
             async with self.current_account.lock:
                 self.current_account.concurrent_messages -= 1
-                # Update global concurrent messages gauge (no account label to reduce cardinality)
-                Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
+                # Decrement global concurrent messages gauge
+                Metrics.concurrent_messages.dec()
 
             # Send response to PowerMTA
             if success:
@@ -438,8 +439,8 @@ class SMTPProxyHandler(asyncio.Protocol):
             try:
                 async with self.current_account.lock:
                     self.current_account.concurrent_messages -= 1
-                    # Update global concurrent messages gauge (no account label to reduce cardinality)
-                    Metrics.concurrent_messages.set(self.current_account.concurrent_messages)
+                    # Decrement global concurrent messages gauge
+                    Metrics.concurrent_messages.dec()
             except:
                 pass
 
