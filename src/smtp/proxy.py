@@ -21,26 +21,20 @@ class SMTPProxyServer:
     def __init__(
         self,
         config_path: Path,
-        settings: Settings,
-        proxy_config_path: Path = None
+        settings: Settings
     ):
         self.config_path = config_path
         self.settings = settings
 
-        # ✅ Load ProxyConfig (provider defaults, feature flags, etc.)
-        if proxy_config_path and proxy_config_path.exists():
-            self.proxy_config = ProxyConfig(proxy_config_path)
-            logger.info(f"[SMTPProxyServer] Loaded proxy config from {proxy_config_path}")
+        # ✅ Load ProxyConfig from same file (config.json contains everything)
+        # First try loading from the same file
+        if config_path.exists():
+            self.proxy_config = ProxyConfig(config_path)
+            logger.info(f"[SMTPProxyServer] Loaded proxy config from {config_path}")
         else:
-            # Try loading config.json from same directory as accounts.json
-            default_config_path = config_path.parent / "config.json"
-            if default_config_path.exists():
-                self.proxy_config = ProxyConfig(default_config_path)
-                logger.info(f"[SMTPProxyServer] Loaded proxy config from {default_config_path}")
-            else:
-                # Use built-in defaults
-                self.proxy_config = ProxyConfig()
-                logger.info("[SMTPProxyServer] Using built-in provider defaults (no config.json found)")
+            # Use built-in defaults
+            self.proxy_config = ProxyConfig()
+            logger.info("[SMTPProxyServer] Using built-in provider defaults")
 
         # ✅ Initialize components with proxy_config
         self.account_manager = AccountManager(config_path, proxy_config=self.proxy_config)
