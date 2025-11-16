@@ -145,7 +145,6 @@ class FeatureFlags:
     backpressure_control: bool = True
     rate_limiting: bool = True
     circuit_breaker: bool = True
-    metrics_enabled: bool = True
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'FeatureFlags':
@@ -157,7 +156,6 @@ class FeatureFlags:
             backpressure_control=data.get('backpressure_control', True),
             rate_limiting=data.get('rate_limiting', True),
             circuit_breaker=data.get('circuit_breaker', True),
-            metrics_enabled=data.get('metrics_enabled', True),
         )
 
 

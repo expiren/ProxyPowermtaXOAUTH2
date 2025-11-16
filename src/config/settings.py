@@ -46,7 +46,6 @@ class Settings:
 
     # Features
     dry_run: bool = False
-    enable_metrics: bool = True
     enable_circuit_breaker: bool = True
 
     @classmethod

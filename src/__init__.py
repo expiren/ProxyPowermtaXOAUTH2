@@ -8,7 +8,6 @@ Modules:
 - oauth2: OAuth2 token management
 - accounts: Account management
 - smtp: SMTP protocol
-- metrics: Prometheus monitoring
 - logging: Logging setup
 - utils: Infrastructure
 
