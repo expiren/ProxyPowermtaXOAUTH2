@@ -125,6 +125,7 @@ class UpstreamRelay:
             # Acquire connection from pool (reuses existing authenticated connections!)
             # ✅ Pass account object for per-account connection pool settings
             # ✅ Moved inside try block to ensure semaphore is always released on any exception
+            connection = None  # Initialize to None so exception handlers can check if assigned
             try:
                 connection = await self.connection_pool.acquire(
                     account_email=account.email,
@@ -211,22 +212,24 @@ class UpstreamRelay:
             except asyncio.TimeoutError:
                 # Timeout - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP timeout")
-                await self.connection_pool.release(account.email, connection, increment_count=False)
-                try:
-                    await connection.quit()
-                except Exception as e:
-                    logger.debug(f"[{account.email}] Error closing connection after timeout: {e}")
+                if connection:  # Only release if connection was acquired
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    try:
+                        await connection.quit()
+                    except Exception as e:
+                        logger.debug(f"[{account.email}] Error closing connection after timeout: {e}")
 
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
                 # Error - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP send error: {e}")
-                await self.connection_pool.release(account.email, connection, increment_count=False)
-                try:
-                    await connection.quit()
-                except Exception as quit_error:
-                    logger.debug(f"[{account.email}] Error closing connection after send error: {quit_error}")
+                if connection:  # Only release if connection was acquired
+                    await self.connection_pool.release(account.email, connection, increment_count=False)
+                    try:
+                        await connection.quit()
+                    except Exception as quit_error:
+                        logger.debug(f"[{account.email}] Error closing connection after send error: {quit_error}")
 
                 # Parse error for better response
                 error_str = str(e).lower()
