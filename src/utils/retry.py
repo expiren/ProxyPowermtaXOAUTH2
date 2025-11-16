@@ -6,13 +6,12 @@ import logging
 from typing import Callable, Any, Type, Tuple, Optional
 from functools import wraps
 
-from src.smtp.constants import (
-    DEFAULT_RETRY_ATTEMPTS,
-    DEFAULT_RETRY_BACKOFF_FACTOR,
-    DEFAULT_RETRY_MAX_DELAY,
-)
-
 logger = logging.getLogger('xoauth2_proxy')
+
+# Default retry settings (avoid circular import with smtp.constants)
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_FACTOR = 2
+DEFAULT_RETRY_MAX_DELAY = 30
 
 
 class RetryConfig:
