@@ -29,6 +29,8 @@ class UpstreamRelay:
         oauth_manager: OAuth2Manager,
         max_connections_per_account: int = 50,
         max_messages_per_connection: int = 100,
+        connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
+        connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
         rate_limiter = None  # ✅ Optional RateLimiter for per-account rate limiting
     ):
         self.oauth_manager = oauth_manager
@@ -38,8 +40,8 @@ class UpstreamRelay:
         self.connection_pool = SMTPConnectionPool(
             max_connections_per_account=max_connections_per_account,
             max_messages_per_connection=max_messages_per_connection,
-            connection_max_age=300,      # 5 minutes
-            connection_idle_timeout=60   # 1 minute
+            connection_max_age=connection_max_age,  # ✅ From config
+            connection_idle_timeout=connection_idle_timeout  # ✅ From config
         )
 
         # Start cleanup task
@@ -49,6 +51,7 @@ class UpstreamRelay:
             f"[UpstreamRelay] Initialized with connection pooling "
             f"(max_conn_per_account={max_connections_per_account}, "
             f"max_msg_per_conn={max_messages_per_connection}, "
+            f"max_age={connection_max_age}s, idle_timeout={connection_idle_timeout}s, "
             f"rate_limiting={'enabled' if rate_limiter else 'disabled'})"
         )
 

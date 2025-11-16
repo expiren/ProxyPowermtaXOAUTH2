@@ -61,6 +61,8 @@ class SMTPProxyServer:
             self.oauth_manager,
             max_connections_per_account=pool_config.max_connections_per_account,
             max_messages_per_connection=pool_config.max_messages_per_connection,
+            connection_max_age=pool_config.connection_max_age_seconds,  # ✅ From config
+            connection_idle_timeout=pool_config.connection_idle_timeout_seconds,  # ✅ From config
             rate_limiter=self.rate_limiter  # ✅ Pass rate limiter for per-account limits
         )
 
