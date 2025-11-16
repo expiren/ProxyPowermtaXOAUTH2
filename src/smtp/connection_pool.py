@@ -1,6 +1,7 @@
 """SMTP connection pooling with aiosmtplib for high-performance async relay"""
 
 import asyncio
+import base64
 import logging
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -372,7 +373,6 @@ class SMTPConnectionPool:
 
             # Authenticate with XOAUTH2
             # XOAUTH2 sends: AUTH XOAUTH2 <base64_xoauth2_string>
-            import base64
             xoauth2_b64 = base64.b64encode(xoauth2_string.encode('utf-8')).decode('ascii')
 
             # Use execute_command for XOAUTH2 authentication

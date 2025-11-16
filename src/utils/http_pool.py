@@ -13,7 +13,6 @@ class HTTPSessionPool:
     """Singleton HTTP session pool for OAuth2 requests (fully async)"""
 
     _instance: Optional['HTTPSessionPool'] = None
-    _lock = asyncio.Lock()
 
     def __new__(cls):
         if cls._instance is None:

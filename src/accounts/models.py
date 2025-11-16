@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING, Dict, Any
+from datetime import datetime, UTC
 import asyncio
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ class AccountConfig:
             from src.oauth2.models import OAuthToken
             self.token = OAuthToken(
                 access_token="",
-                expires_at=__import__('datetime').datetime.now(__import__('datetime').UTC),
+                expires_at=datetime.now(UTC),
                 refresh_token=self.refresh_token
             )
 
