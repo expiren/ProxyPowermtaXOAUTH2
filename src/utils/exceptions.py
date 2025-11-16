@@ -26,8 +26,8 @@ class DuplicateAccount(AccountError):
     pass
 
 
-class ConnectionError(ProxyException):
-    """Connection error"""
+class ProxyConnectionError(ProxyException):
+    """Proxy connection error (renamed to avoid shadowing built-in ConnectionError)"""
     pass
 
 
@@ -41,6 +41,6 @@ class RateLimitExceeded(ProxyException):
     pass
 
 
-class TimeoutError(ProxyException):
-    """Operation timeout"""
+class ProxyTimeoutError(ProxyException):
+    """Proxy operation timeout (renamed to avoid shadowing built-in TimeoutError)"""
     pass

@@ -10,10 +10,10 @@ from src.utils.exceptions import (
     AccountError,
     AccountNotFound,
     DuplicateAccount,
-    ConnectionError,
+    ProxyConnectionError,
     CircuitBreakerOpen,
     RateLimitExceeded,
-    TimeoutError,
+    ProxyTimeoutError,
 )
 
 __all__ = [
@@ -36,8 +36,8 @@ __all__ = [
     'AccountError',
     'AccountNotFound',
     'DuplicateAccount',
-    'ConnectionError',
+    'ProxyConnectionError',
     'CircuitBreakerOpen',
     'RateLimitExceeded',
-    'TimeoutError',
+    'ProxyTimeoutError',
 ]

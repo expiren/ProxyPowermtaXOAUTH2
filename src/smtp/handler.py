@@ -99,7 +99,17 @@ class SMTPProxyHandler(asyncio.Protocol):
         while b'\r\n' in self.buffer:
             line, self.buffer = self.buffer.split(b'\r\n', 1)
             # Put line in queue instead of creating task (queuing is sync and fast)
-            self.line_queue.put_nowait(line)
+            try:
+                self.line_queue.put_nowait(line)
+            except asyncio.QueueFull:
+                # Backpressure queue full - client sending too fast, close connection
+                logger.warning(
+                    f"[{self.peername}] Backpressure queue full "
+                    f"({self.line_queue.qsize()}/{self.line_queue.maxsize}), closing connection"
+                )
+                self.send_response(421, "4.4.5 Server too busy, closing connection")
+                self.transport.close()
+                break  # Stop processing more lines
 
     async def _process_lines(self):
         """Process lines from queue (ONE task per connection instead of per-line)"""
