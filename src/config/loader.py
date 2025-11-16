@@ -58,6 +58,14 @@ class ConfigLoader:
                     if not k.startswith('_')
                 }
 
+                # Validate oauth_endpoint format (must be host:port)
+                oauth_endpoint = filtered_data.get('oauth_endpoint', '')
+                if not oauth_endpoint or ':' not in oauth_endpoint:
+                    raise ConfigError(
+                        f"Invalid oauth_endpoint format (must be host:port): "
+                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
                 account = AccountConfig(**filtered_data)
 
                 # Check for duplicate emails
@@ -81,6 +89,9 @@ class ConfigLoader:
                         )
                     else:
                         logger.warning(f"[ConfigLoader] No connection pool config for {account.email}")
+
+                # Validate account configuration
+                ConfigLoader.validate_account(account)
 
                 accounts[account.email] = account
                 seen_ids.add(account.account_id)
