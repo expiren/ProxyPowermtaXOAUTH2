@@ -234,4 +234,6 @@ class OAuth2Manager:
         # No lock needed - called during shutdown only
         self.token_cache.clear()
         self.cache_locks.clear()
-        logger.info("[OAuth2Manager] Cleaned up")
+        # Close HTTP connection pool to prevent connection leaks
+        await http_pool.close()
+        logger.info("[OAuth2Manager] Cleaned up (including HTTP pool)")
