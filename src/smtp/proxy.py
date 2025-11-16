@@ -82,6 +82,33 @@ class SMTPProxyServer:
         logger.info(f"[SMTPProxyServer] Initialized with {num_accounts} accounts")
         return num_accounts
 
+    async def reload(self):
+        """Reload configuration (accounts and provider settings)"""
+        logger.info("[SMTPProxyServer] Reloading configuration...")
+
+        # Reload ProxyConfig from file
+        if self.config_path.exists():
+            old_proxy_config = self.proxy_config
+            self.proxy_config = ProxyConfig(self.config_path)
+            logger.info(f"[SMTPProxyServer] Reloaded proxy config from {self.config_path}")
+
+            # Update account_manager's proxy_config reference
+            self.account_manager.proxy_config = self.proxy_config
+            # Reload accounts (will use new provider configs)
+            num_accounts = await self.account_manager.reload()
+
+            logger.info(
+                f"[SMTPProxyServer] Reload complete - {num_accounts} accounts loaded with updated provider settings"
+            )
+            logger.warning(
+                "[SMTPProxyServer] NOTE: Global defaults (UpstreamRelay, RateLimiter baseline) "
+                "were NOT updated - per-account settings from reloaded config WILL be used"
+            )
+            return num_accounts
+        else:
+            logger.error(f"[SMTPProxyServer] Cannot reload - config file not found: {self.config_path}")
+            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+
     async def start(self):
         """Start the SMTP proxy server"""
         try:

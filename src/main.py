@@ -66,14 +66,14 @@ class Application:
             await self.shutdown()
 
         async def reload_handler():
-            """Handle SIGHUP - reload accounts configuration"""
-            logger.info("Received SIGHUP - reloading accounts configuration...")
+            """Handle SIGHUP - reload full configuration (accounts + provider settings)"""
+            logger.info("Received SIGHUP - reloading configuration...")
             try:
-                if self.proxy_server and self.proxy_server.account_manager:
-                    await self.proxy_server.account_manager.reload()
-                    logger.info("Account configuration reloaded successfully")
+                if self.proxy_server:
+                    num_accounts = await self.proxy_server.reload()
+                    logger.info(f"Configuration reloaded successfully ({num_accounts} accounts)")
                 else:
-                    logger.warning("Cannot reload: proxy_server or account_manager not initialized")
+                    logger.warning("Cannot reload: proxy_server not initialized")
             except Exception as e:
                 logger.error(f"Error reloading configuration: {e}", exc_info=True)
 
