@@ -412,12 +412,12 @@ class SMTPConnectionPool:
             logger.error(f"[Pool] Error cleaning up {account_email}: {e}")
 
     async def close_all(self):
-        """Close all pooled connections (skips busy ones to prevent double-release)"""
+        """Close all pooled connections (releases semaphores for busy ones to prevent leak)"""
         # Get snapshot of accounts (no lock needed for list() on dict.keys())
         accounts = list(self.pools.keys())
 
         total_closed = 0
-        busy_skipped = 0
+        busy_released = 0
 
         for account_email in accounts:
             lock = self.locks[account_email]
@@ -425,23 +425,27 @@ class SMTPConnectionPool:
                 pool = self.pools[account_email]
                 for pooled in list(pool):  # Copy to avoid modification during iteration
                     if pooled.is_busy:
-                        # Skip busy connections - they'll be released when the in-flight operation completes
-                        # This prevents double-release of semaphores
-                        busy_skipped += 1
-                        logger.warning(
-                            f"[Pool] Skipping busy connection during shutdown for {account_email} "
-                            f"(will be released by in-flight operation)"
-                        )
+                        # Connection is busy - can't close it, but must release semaphore now
+                        # Otherwise when operation completes and calls release(), connection won't be
+                        # in pool (cleared below) and semaphore will leak
+                        if pooled.semaphore:
+                            pooled.semaphore.release()
+                            pooled.semaphore = None
+                            busy_released += 1
+                            logger.debug(
+                                f"[Pool] Released semaphore for busy connection during shutdown "
+                                f"for {account_email} (connection will close when operation completes)"
+                            )
                         continue
 
                     await self._close_connection(pooled)
                     total_closed += 1
                 pool.clear()
 
-        if busy_skipped > 0:
-            logger.warning(
+        if busy_released > 0:
+            logger.info(
                 f"[Pool] Shutdown: closed {total_closed} connections, "
-                f"skipped {busy_skipped} busy connections (will leak until operation completes)"
+                f"released semaphores for {busy_released} busy connections"
             )
         else:
             logger.info(f"[Pool] Closed all {total_closed} connections")

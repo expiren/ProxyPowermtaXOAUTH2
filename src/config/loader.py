@@ -58,12 +58,33 @@ class ConfigLoader:
                     if not k.startswith('_')
                 }
 
-                # Validate oauth_endpoint format (must be host:port)
+                # Validate oauth_endpoint format (must be host:port with valid numeric port)
                 oauth_endpoint = filtered_data.get('oauth_endpoint', '')
                 if not oauth_endpoint or ':' not in oauth_endpoint:
                     raise ConfigError(
                         f"Invalid oauth_endpoint format (must be host:port): "
                         f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
+                # Validate port is numeric and in valid range
+                parts = oauth_endpoint.split(':')
+                if len(parts) != 2:
+                    raise ConfigError(
+                        f"Invalid oauth_endpoint format (must have exactly one colon): "
+                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
+                try:
+                    port = int(parts[1])
+                    if not (1 <= port <= 65535):
+                        raise ConfigError(
+                            f"Port must be between 1 and 65535: "
+                            f"{port} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                        )
+                except ValueError:
+                    raise ConfigError(
+                        f"Port must be numeric: "
+                        f"{parts[1]} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
                     )
 
                 account = AccountConfig(**filtered_data)
