@@ -27,7 +27,7 @@ class Application:
         """Main application loop"""
         try:
             # Parse CLI arguments
-            args, config_path = parse_arguments()
+            args, config_path, proxy_config_path = parse_arguments()
 
             # Verify config exists
             if not config_path.exists():
@@ -39,9 +39,12 @@ class Application:
 
             # Create and start proxy server
             logger.info(f"Initializing XOAUTH2 Proxy from {config_path}")
+            if proxy_config_path:
+                logger.info(f"Using proxy configuration from {proxy_config_path}")
             self.proxy_server = SMTPProxyServer(
                 config_path=config_path,
-                settings=settings
+                settings=settings,
+                proxy_config_path=proxy_config_path
             )
 
             # Setup signal handlers

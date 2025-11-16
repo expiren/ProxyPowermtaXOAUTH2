@@ -41,13 +41,16 @@ class SMTPProxyHandler(asyncio.Protocol):
         oauth_manager: OAuth2Manager,
         upstream_relay: UpstreamRelay,
         dry_run: bool = False,
-        global_concurrency_limit: int = 100
+        global_concurrency_limit: int = 100,
+        global_semaphore: asyncio.Semaphore = None,
+        backpressure_queue_size: int = 1000
     ):
         self.config_manager = config_manager
         self.oauth_manager = oauth_manager
         self.upstream_relay = upstream_relay
         self.dry_run = dry_run
         self.global_concurrency_limit = global_concurrency_limit
+        self.global_semaphore = global_semaphore  # ✅ Global semaphore for backpressure
 
         self.transport = None
         self.peername = None
@@ -59,8 +62,8 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.buffer = b''
         self.state = 'INITIAL'
 
-        # Line processing queue (to avoid task spam)
-        self.line_queue = asyncio.Queue()
+        # Line processing queue (✅ with maxsize for backpressure)
+        self.line_queue = asyncio.Queue(maxsize=backpressure_queue_size)
         self.processing_task = None
 
     def connection_made(self, transport):
@@ -347,14 +350,26 @@ class SMTPProxyHandler(asyncio.Protocol):
         try:
             logger.info(f"[{self.current_account.email}] Processing message for {len(self.rcpt_tos)} recipients")
 
-            # Send message via XOAUTH2 to upstream SMTP server
-            success, smtp_code, smtp_message = await self.upstream_relay.send_message(
-                account=self.current_account,
-                message_data=self.message_data,
-                mail_from=self.mail_from,
-                rcpt_tos=self.rcpt_tos,
-                dry_run=self.dry_run
-            )
+            # ✅ Acquire global semaphore for backpressure (limits concurrent message processing)
+            if self.global_semaphore:
+                async with self.global_semaphore:
+                    # Send message via XOAUTH2 to upstream SMTP server
+                    success, smtp_code, smtp_message = await self.upstream_relay.send_message(
+                        account=self.current_account,
+                        message_data=self.message_data,
+                        mail_from=self.mail_from,
+                        rcpt_tos=self.rcpt_tos,
+                        dry_run=self.dry_run
+                    )
+            else:
+                # Fallback if no global semaphore provided (backward compatibility)
+                success, smtp_code, smtp_message = await self.upstream_relay.send_message(
+                    account=self.current_account,
+                    message_data=self.message_data,
+                    mail_from=self.mail_from,
+                    rcpt_tos=self.rcpt_tos,
+                    dry_run=self.dry_run
+                )
 
             # Update concurrency
             async with self.current_account.lock:

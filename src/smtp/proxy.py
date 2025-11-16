@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from src.config.settings import Settings
+from src.config.proxy_config import ProxyConfig
 from src.oauth2.manager import OAuth2Manager
 from src.accounts.manager import AccountManager
 from src.metrics.server import MetricsServer
@@ -20,16 +21,45 @@ class SMTPProxyServer:
     def __init__(
         self,
         config_path: Path,
-        settings: Settings
+        settings: Settings,
+        proxy_config_path: Path = None
     ):
         self.config_path = config_path
         self.settings = settings
 
-        # Initialize components
-        self.account_manager = AccountManager(config_path)
+        # ✅ Load ProxyConfig (provider defaults, feature flags, etc.)
+        if proxy_config_path and proxy_config_path.exists():
+            self.proxy_config = ProxyConfig(proxy_config_path)
+            logger.info(f"[SMTPProxyServer] Loaded proxy config from {proxy_config_path}")
+        else:
+            # Try loading config.json from same directory as accounts.json
+            default_config_path = config_path.parent / "config.json"
+            if default_config_path.exists():
+                self.proxy_config = ProxyConfig(default_config_path)
+                logger.info(f"[SMTPProxyServer] Loaded proxy config from {default_config_path}")
+            else:
+                # Use built-in defaults
+                self.proxy_config = ProxyConfig()
+                logger.info("[SMTPProxyServer] Using built-in provider defaults (no config.json found)")
+
+        # ✅ Initialize components with proxy_config
+        self.account_manager = AccountManager(config_path, proxy_config=self.proxy_config)
         self.oauth_manager = OAuth2Manager(timeout=settings.oauth2_timeout)
-        self.upstream_relay = UpstreamRelay(self.oauth_manager)
+
+        # ✅ Initialize UpstreamRelay with provider-specific connection pool settings
+        # Use Gmail defaults as baseline (most common provider)
+        gmail_config = self.proxy_config.get_provider_config('gmail')
+        pool_config = gmail_config.connection_pool
+        self.upstream_relay = UpstreamRelay(
+            self.oauth_manager,
+            max_connections_per_account=pool_config.max_connections_per_account,
+            max_messages_per_connection=pool_config.max_messages_per_connection
+        )
+
         self.metrics_server = MetricsServer(host='0.0.0.0', port=settings.metrics_port)
+
+        # ✅ Global semaphore for backpressure
+        self.global_semaphore = asyncio.Semaphore(self.proxy_config.global_config.global_concurrency_limit)
 
         self.server = None
 
@@ -75,14 +105,17 @@ class SMTPProxyServer:
                     oauth_manager=self.oauth_manager,
                     upstream_relay=self.upstream_relay,
                     dry_run=self.settings.dry_run,
-                    global_concurrency_limit=self.settings.global_concurrency_limit
+                    global_concurrency_limit=self.settings.global_concurrency_limit,
+                    global_semaphore=self.global_semaphore,
+                    backpressure_queue_size=self.proxy_config.global_config.backpressure_queue_size
                 )
 
-            # Create SMTP server
+            # Create SMTP server (with backlog for TCP backpressure)
             self.server = await loop.create_server(
                 handler_factory,
                 self.settings.host,
-                self.settings.port
+                self.settings.port,
+                backlog=self.proxy_config.global_config.connection_backlog
             )
 
             logger.info("[SMTPProxyServer] XOAUTH2 proxy started successfully")

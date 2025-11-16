@@ -14,8 +14,9 @@ logger = logging.getLogger('xoauth2_proxy')
 class AccountManager:
     """Manages accounts with in-memory caching"""
 
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, proxy_config=None):
         self.config_path = config_path
+        self.proxy_config = proxy_config  # ✅ Store proxy_config
         self.accounts: Dict[str, AccountConfig] = {}  # email -> account
         self.accounts_by_id: Dict[str, AccountConfig] = {}  # account_id -> account
         self.lock = asyncio.Lock()
@@ -25,9 +26,10 @@ class AccountManager:
         self.email_cache: Dict[str, AccountConfig] = {}
 
     async def load(self) -> int:
-        """Load accounts from config file"""
+        """Load accounts from config file with proxy config merging"""
         from src.config.loader import ConfigLoader
-        accounts = ConfigLoader.load(self.config_path)
+        # ✅ Pass proxy_config to ConfigLoader
+        accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
         async with self.lock:
             self.accounts = accounts
@@ -78,7 +80,8 @@ class AccountManager:
     async def reload(self) -> int:
         """Reload accounts from config (hot-reload)"""
         try:
-            accounts = ConfigLoader.load(self.config_path)
+            # ✅ Pass proxy_config to ConfigLoader
+            accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
             async with self.lock:
                 # Keep existing tokens for accounts that didn't change

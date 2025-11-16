@@ -60,34 +60,45 @@ class CircuitBreaker:
         Raises:
             CircuitBreakerOpen: If circuit is open
         """
-        async with self.lock:
-            if self.state == CircuitBreakerState.OPEN:
-                # Check if recovery timeout has elapsed
-                if self._should_attempt_recovery():
-                    self.state = CircuitBreakerState.HALF_OPEN
-                    logger.info(f"[CircuitBreaker] {self.name} moving to HALF_OPEN state")
-                else:
-                    raise CircuitBreakerOpen(
-                        f"Circuit breaker {self.name} is OPEN"
-                    )
+        # ✅ FAST PATH: Check state without lock (99.9% of calls in healthy system)
+        # Reading self.state is atomic for Enum types in Python
+        current_state = self.state
 
+        if current_state == CircuitBreakerState.OPEN:
+            # SLOW PATH: Acquire lock to check recovery
+            async with self.lock:
+                # Double-check state (may have changed while waiting for lock)
+                if self.state == CircuitBreakerState.OPEN:
+                    # Check if recovery timeout has elapsed
+                    if self._should_attempt_recovery():
+                        self.state = CircuitBreakerState.HALF_OPEN
+                        logger.info(f"[CircuitBreaker] {self.name} moving to HALF_OPEN state")
+                    else:
+                        raise CircuitBreakerOpen(
+                            f"Circuit breaker {self.name} is OPEN"
+                        )
+
+        # Execute function (no lock held during execution - critical for throughput!)
         try:
             result = await func(*args, **kwargs)
 
-            # Success - update state
-            async with self.lock:
-                if self.state == CircuitBreakerState.HALF_OPEN:
-                    self.success_count += 1
-                    # Allow 2 successes before closing
-                    if self.success_count >= 2:
-                        self._close()
-                else:
+            # Success - update state only if needed (avoid lock in common case)
+            if current_state == CircuitBreakerState.HALF_OPEN:
+                async with self.lock:
+                    if self.state == CircuitBreakerState.HALF_OPEN:
+                        self.success_count += 1
+                        # Allow 2 successes before closing
+                        if self.success_count >= 2:
+                            self._close()
+            elif self.failure_count > 0:
+                # Reset failure count on success (only if non-zero)
+                async with self.lock:
                     self.failure_count = 0
 
             return result
 
         except Exception as e:
-            # Failure - update state
+            # Failure - always update state
             async with self.lock:
                 self.failure_count += 1
                 self.last_failure_time = datetime.now(UTC)

@@ -14,6 +14,7 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   python xoauth2_proxy.py --config accounts.json
+  python xoauth2_proxy.py --config accounts.json --proxy-config config.json
   python xoauth2_proxy.py --host 0.0.0.0 --port 2525 --config /etc/xoauth2/accounts.json
   python xoauth2_proxy.py --dry-run --config accounts.json
   python xoauth2_proxy.py --global-concurrency 1000 --config accounts.json
@@ -26,6 +27,13 @@ Examples:
         type=str,
         default='accounts.json',
         help='Path to accounts.json configuration file (default: accounts.json)'
+    )
+
+    parser.add_argument(
+        '--proxy-config',
+        type=str,
+        default=None,
+        help='Path to config.json proxy configuration file (default: auto-detect from accounts.json directory or use built-in defaults)'
     )
 
     # Server settings
@@ -71,7 +79,12 @@ Examples:
     # Smart config path discovery
     config_path = Settings.get_config_path(args.config)
 
-    return args, config_path
+    # Proxy config path (optional, will be auto-detected if not provided)
+    proxy_config_path = None
+    if args.proxy_config:
+        proxy_config_path = Settings.get_config_path(args.proxy_config)
+
+    return args, config_path, proxy_config_path
 
 
 def create_settings(args: argparse.Namespace) -> Settings:
