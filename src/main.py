@@ -65,11 +65,23 @@ class Application:
         async def shutdown_handler():
             await self.shutdown()
 
+        async def reload_handler():
+            """Handle SIGHUP - reload accounts configuration"""
+            logger.info("Received SIGHUP - reloading accounts configuration...")
+            try:
+                if self.proxy_server and self.proxy_server.account_manager:
+                    await self.proxy_server.account_manager.reload()
+                    logger.info("Account configuration reloaded successfully")
+                else:
+                    logger.warning("Cannot reload: proxy_server or account_manager not initialized")
+            except Exception as e:
+                logger.error(f"Error reloading configuration: {e}", exc_info=True)
+
         if platform.system() != "Windows":
             # Unix-like systems
             loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(shutdown_handler()))
             loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(shutdown_handler()))
-            loop.add_signal_handler(signal.SIGHUP, lambda: logger.info("Received SIGHUP - hot reload not yet implemented"))
+            loop.add_signal_handler(signal.SIGHUP, lambda: asyncio.create_task(reload_handler()))
         else:
             # Windows - signal handlers run outside event loop, use call_soon_threadsafe
             def windows_signal_handler(sig, frame):
