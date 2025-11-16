@@ -84,12 +84,26 @@ class AccountManager:
             accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
             async with self.lock:
-                # Keep existing tokens for accounts that didn't change
+                # Preserve runtime state from existing accounts
+                # This prevents lock separation and state loss during hot-reload
                 for email, new_account in accounts.items():
                     if email in self.accounts:
                         old_account = self.accounts[email]
+
+                        # Preserve token if refresh_token unchanged
                         if new_account.refresh_token == old_account.refresh_token:
                             new_account.token = old_account.token
+
+                        # ✅ FIX: Preserve lock to prevent lock separation
+                        # In-flight requests hold references to old account with old lock
+                        # New requests get new account - must use SAME lock for concurrency
+                        new_account.lock = old_account.lock
+
+                        # ✅ FIX: Preserve runtime counters
+                        # Prevents state loss and inaccurate metrics after hot-reload
+                        new_account.messages_this_hour = old_account.messages_this_hour
+                        new_account.concurrent_messages = old_account.concurrent_messages
+                        new_account.active_connections = old_account.active_connections
 
                 # Clear cache BEFORE replacing dicts to prevent race condition
                 # This ensures lookups during replacement will use the new dict instead of stale cache
