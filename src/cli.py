@@ -51,13 +51,6 @@ Examples:
         help='Listen port (default: 2525)'
     )
 
-    parser.add_argument(
-        '--metrics-port',
-        type=int,
-        default=9090,
-        help='Prometheus metrics port (default: 9090)'
-    )
-
     # Performance tuning
     parser.add_argument(
         '--global-concurrency',
@@ -92,7 +85,6 @@ def create_settings(args: argparse.Namespace) -> Settings:
     return Settings(
         host=args.host,
         port=args.port,
-        metrics_port=args.metrics_port,
         global_concurrency_limit=args.global_concurrency,
         dry_run=args.dry_run,
     )

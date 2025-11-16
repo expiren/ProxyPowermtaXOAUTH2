@@ -8,7 +8,6 @@ from src.config.settings import Settings
 from src.config.proxy_config import ProxyConfig
 from src.oauth2.manager import OAuth2Manager
 from src.accounts.manager import AccountManager
-from src.metrics.server import MetricsServer
 from src.smtp.handler import SMTPProxyHandler
 from src.smtp.upstream import UpstreamRelay
 from src.utils.rate_limiter import RateLimiter
@@ -70,8 +69,6 @@ class SMTPProxyServer:
             rate_limiter=self.rate_limiter  # ✅ Pass rate limiter for per-account limits
         )
 
-        self.metrics_server = MetricsServer(host='0.0.0.0', port=settings.metrics_port)
-
         # ✅ Global semaphore for backpressure
         self.global_semaphore = asyncio.Semaphore(self.proxy_config.global_config.global_concurrency_limit)
 
@@ -88,10 +85,7 @@ class SMTPProxyServer:
         # Initialize upstream relay with connection pool
         await self.upstream_relay.initialize()
 
-        logger.info(
-            f"[SMTPProxyServer] Initialized with {num_accounts} accounts, "
-            f"metrics on port {self.settings.metrics_port}"
-        )
+        logger.info(f"[SMTPProxyServer] Initialized with {num_accounts} accounts")
         return num_accounts
 
     async def start(self):
@@ -104,11 +98,7 @@ class SMTPProxyServer:
                 f"Starting XOAUTH2 proxy on {self.settings.host}:{self.settings.port} "
                 f"({num_accounts} accounts)"
             )
-            logger.info(f"Metrics server: http://0.0.0.0:{self.settings.metrics_port}/metrics")
             logger.info(f"Dry-run mode: {self.settings.dry_run}")
-
-            # Start metrics server in background task
-            metrics_task = asyncio.create_task(self.metrics_server.start())
 
             # Create SMTP server factory
             loop = asyncio.get_running_loop()
@@ -153,7 +143,6 @@ class SMTPProxyServer:
             self.server.close()
             await self.server.wait_closed()
 
-        await self.metrics_server.stop()
         await self.upstream_relay.shutdown()
         await self.oauth_manager.cleanup()
 

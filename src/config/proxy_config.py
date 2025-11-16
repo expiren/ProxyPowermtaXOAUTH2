@@ -169,7 +169,6 @@ class ProxyConfig:
         self.global_config: GlobalConfig = GlobalConfig()
         self.providers: Dict[str, ProviderConfig] = {}
         self.features: FeatureFlags = FeatureFlags()
-        self.metrics_port: int = 9090
 
         if config_path and config_path.exists():
             self.load(config_path)
@@ -200,10 +199,6 @@ class ProxyConfig:
             # Load feature flags
             if 'features' in data:
                 self.features = FeatureFlags.from_dict(data['features'])
-
-            # Load monitoring config
-            if 'monitoring' in data:
-                self.metrics_port = data['monitoring'].get('metrics_port', 9090)
 
             logger.info(
                 f"[ProxyConfig] Loaded configuration from {config_path} "
@@ -283,5 +278,4 @@ class ProxyConfig:
                 for name, cfg in self.providers.items()
             },
             'features': self.features.__dict__,
-            'metrics_port': self.metrics_port,
         }

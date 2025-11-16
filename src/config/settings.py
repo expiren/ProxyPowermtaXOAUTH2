@@ -12,7 +12,6 @@ class Settings:
     # Server settings
     host: str = "127.0.0.1"
     port: int = 2525
-    metrics_port: int = 9090
 
     # Performance tuning (high-concurrency configuration)
     global_concurrency_limit: int = 100
@@ -56,7 +55,6 @@ class Settings:
         return cls(
             host=os.getenv('XOAUTH2_HOST', '127.0.0.1'),
             port=int(os.getenv('XOAUTH2_PORT', 2525)),
-            metrics_port=int(os.getenv('XOAUTH2_METRICS_PORT', 9090)),
             global_concurrency_limit=int(os.getenv('XOAUTH2_GLOBAL_CONCURRENCY', 100)),
             dry_run=os.getenv('XOAUTH2_DRY_RUN', 'false').lower() == 'true',
         )

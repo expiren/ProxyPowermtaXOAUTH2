@@ -8,7 +8,6 @@ from typing import Optional, List, Tuple
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
-from src.metrics.collector import MetricsCollector
 from src.smtp.connection_pool import SMTPConnectionPool
 from src.smtp.exceptions import (
     SMTPAuthenticationError, SMTPConnectionError,
@@ -16,9 +15,6 @@ from src.smtp.exceptions import (
 )
 
 logger = logging.getLogger('xoauth2_proxy')
-
-# Alias for metrics
-Metrics = MetricsCollector
 
 
 class UpstreamRelay:
@@ -100,7 +96,6 @@ class UpstreamRelay:
                 except Exception as e:
                     # Rate limit exceeded - reject with temporary failure
                     logger.warning(f"[{account.email}] Rate limit exceeded: {e}")
-                    Metrics.errors_total.labels(error_type='rate_limit').inc()
                     return (False, 451, "4.4.4 Rate limit exceeded, try again later")
 
             # Refresh token if needed
@@ -202,9 +197,6 @@ class UpstreamRelay:
                 await self.connection_pool.release(account.email, connection, increment_count=True)
 
                 duration = time.time() - start_time
-                Metrics.messages_total.labels(result='success').inc()
-                Metrics.messages_duration_seconds.observe(duration)
-
                 logger.info(
                     f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipient(s) "
                     f"({duration:.3f}s)"
@@ -226,8 +218,6 @@ class UpstreamRelay:
                     pass
 
                 duration = time.time() - start_time
-                Metrics.messages_total.labels(result='failure').inc()
-                Metrics.messages_duration_seconds.observe(duration)
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
@@ -240,8 +230,6 @@ class UpstreamRelay:
                     pass
 
                 duration = time.time() - start_time
-                Metrics.messages_total.labels(result='failure').inc()
-                Metrics.messages_duration_seconds.observe(duration)
 
                 # Parse error for better response
                 error_str = str(e).lower()
@@ -257,9 +245,6 @@ class UpstreamRelay:
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
-            Metrics.messages_total.labels(result='failure').inc()
-            Metrics.errors_total.labels(error_type='relay').inc()
-            Metrics.messages_duration_seconds.observe(duration)
             return (False, 450, "4.4.2 Internal error")
 
     async def shutdown(self):

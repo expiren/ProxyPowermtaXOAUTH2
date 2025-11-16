@@ -10,9 +10,6 @@ aiosmtplib>=3.0.0
 # Async HTTP client for OAuth2 token refresh (PHASE 1: Replaced blocking requests library)
 aiohttp>=3.8.0
 
-# Prometheus metrics and monitoring
-prometheus-client>=0.15.0
-
 # Optional: HTTPS/TLS support (included in stdlib but listed for clarity)
 # ssl (built-in)
 
