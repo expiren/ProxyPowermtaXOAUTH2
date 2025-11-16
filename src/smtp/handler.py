@@ -23,8 +23,15 @@ _RESPONSE_503_BAD_SEQ = b'503 Bad sequence of commands\r\n'
 
 # Pre-compiled regex patterns (performance optimization)
 # Avoids re-compiling on every MAIL/RCPT command (1666+ compilations/sec at 833 msg/sec)
-_MAIL_FROM_PATTERN = re.compile(r'FROM:<(.+?)>', re.IGNORECASE)
+# MAIL FROM allows empty address <> for bounce messages (RFC 5321 Section 4.1.2)
+_MAIL_FROM_PATTERN = re.compile(r'FROM:<(.*?)>', re.IGNORECASE)
 _RCPT_TO_PATTERN = re.compile(r'TO:<(.+?)>', re.IGNORECASE)
+
+# SMTP SIZE limit (50 MB - advertised in EHLO)
+MAX_MESSAGE_SIZE = 52428800  # 50 MB
+
+# Maximum number of recipients per message
+MAX_RECIPIENTS = 1000
 
 
 class SMTPProxyHandler(asyncio.Protocol):
@@ -136,6 +143,27 @@ class SMTPProxyHandler(asyncio.Protocol):
                 if line == b'.':
                     await self.handle_message_data(self.message_data)
                 else:
+                    # RFC 5321 Section 4.5.2: Transparency (Dot-Unstuffing)
+                    # Lines beginning with "." have an additional "." prepended by sender
+                    # We must remove the leading dot here
+                    if line.startswith(b'.'):
+                        line = line[1:]  # Remove leading dot
+
+                    # Calculate new message size before adding line
+                    new_size = len(self.message_data) + len(line) + 2  # +2 for \r\n
+                    if new_size > MAX_MESSAGE_SIZE:
+                        logger.warning(
+                            f"[{self.peername}] Message size exceeds limit: "
+                            f"{new_size} > {MAX_MESSAGE_SIZE}"
+                        )
+                        self.send_response(552, "5.3.4 Message size exceeds fixed limit")
+                        # Reset state to accept next message
+                        self.mail_from = None
+                        self.rcpt_tos = []
+                        self.message_data = b''
+                        self.state = 'AUTH_RECEIVED'
+                        return
+
                     # Add line to message data (preserve original line endings)
                     if self.message_data:
                         self.message_data += b'\r\n'
@@ -291,14 +319,25 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.send_response(501, "Syntax error")
             return
 
-        self.mail_from = match.group(1)
-        logger.info(f"[{self.current_account.email}] MAIL FROM: {self.mail_from}")
+        # RFC 5321 Section 4.1.2: Empty address <> is valid for bounce messages
+        self.mail_from = match.group(1) if match.group(1) else ""
+        logger.info(f"[{self.current_account.email}] MAIL FROM: <{self.mail_from}>")
         self.send_response(250, "2.1.0 OK")
 
     async def handle_rcpt(self, args: str):
         """Handle RCPT TO command"""
-        if not self.mail_from:
+        # Check if MAIL FROM was issued (mail_from can be empty string for NULL sender)
+        if self.mail_from is None:
             self.send_response(503, "MAIL first")
+            return
+
+        # Check recipient limit to prevent DoS via memory exhaustion
+        if len(self.rcpt_tos) >= MAX_RECIPIENTS:
+            logger.warning(
+                f"[{self.current_account.email}] Too many recipients: "
+                f"{len(self.rcpt_tos)} >= {MAX_RECIPIENTS}"
+            )
+            self.send_response(452, "4.5.3 Too many recipients")
             return
 
         match = _RCPT_TO_PATTERN.search(args)
@@ -313,7 +352,8 @@ class SMTPProxyHandler(asyncio.Protocol):
 
     async def handle_data(self):
         """Handle DATA command"""
-        if not self.mail_from:
+        # Check if MAIL FROM was issued (mail_from can be empty string for NULL sender)
+        if self.mail_from is None:
             self.send_response(503, "MAIL first")
             return
 
