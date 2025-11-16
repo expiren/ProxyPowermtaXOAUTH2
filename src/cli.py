@@ -21,12 +21,19 @@ Examples:
         """
     )
 
-    # Configuration (hardcoded to config.json by default)
+    # Configuration files (separated: config.json for settings, accounts.json for credentials)
     parser.add_argument(
         '--config',
         type=str,
         default='config.json',
-        help='Path to config.json file (default: config.json - hardcoded)'
+        help='Path to config.json file (global settings, default: config.json)'
+    )
+
+    parser.add_argument(
+        '--accounts',
+        type=str,
+        default='accounts.json',
+        help='Path to accounts.json file (account credentials, default: accounts.json)'
     )
 
     # Server settings
@@ -62,10 +69,11 @@ Examples:
     # Parse arguments
     args = parser.parse_args()
 
-    # Smart config path discovery
+    # Smart config path discovery for both files
     config_path = Settings.get_config_path(args.config)
+    accounts_path = Settings.get_config_path(args.accounts)
 
-    return args, config_path
+    return args, config_path, accounts_path
 
 
 def create_settings(args: argparse.Namespace) -> Settings:

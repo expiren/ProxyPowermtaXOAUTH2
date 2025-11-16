@@ -1,0 +1,70 @@
+{
+  "_comment": "Global configuration and provider defaults",
+  "global": {
+    "concurrency": {
+      "global_concurrency_limit": 100,
+      "backpressure_queue_size": 1000,
+      "connection_backlog": 100
+    },
+    "timeouts": {
+      "oauth2_timeout": 10,
+      "connection_acquire_timeout": 5
+    }
+  },
+  "providers": {
+    "gmail": {
+      "oauth_token_url": "https://oauth2.googleapis.com/token",
+      "connection_pool": {
+        "max_connections_per_account": 50,
+        "max_messages_per_connection": 100,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60
+      },
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 2000,
+        "messages_per_minute_per_connection": 25,
+        "burst_size": 50
+      },
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    },
+    "outlook": {
+      "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "connection_pool": {
+        "max_connections_per_account": 50,
+        "max_messages_per_connection": 100,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60
+      },
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 5000,
+        "messages_per_minute_per_connection": 30,
+        "burst_size": 60
+      },
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    }
+  }
+}

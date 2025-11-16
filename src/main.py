@@ -26,21 +26,28 @@ class Application:
     async def run(self):
         """Main application loop"""
         try:
-            # Parse CLI arguments
-            args, config_path = parse_arguments()
+            # Parse CLI arguments (returns config_path and accounts_path separately)
+            args, config_path, accounts_path = parse_arguments()
 
-            # Verify config exists
+            # Verify both config files exist
             if not config_path.exists():
                 logger.error(f"Config file not found: {config_path}")
+                sys.exit(1)
+
+            if not accounts_path.exists():
+                logger.error(f"Accounts file not found: {accounts_path}")
                 sys.exit(1)
 
             # Create settings
             settings = create_settings(args)
 
             # Create and start proxy server
-            logger.info(f"Initializing XOAUTH2 Proxy from {config_path}")
+            logger.info(f"Initializing XOAUTH2 Proxy")
+            logger.info(f"  Config: {config_path}")
+            logger.info(f"  Accounts: {accounts_path}")
             self.proxy_server = SMTPProxyServer(
                 config_path=config_path,
+                accounts_path=accounts_path,
                 settings=settings
             )
 

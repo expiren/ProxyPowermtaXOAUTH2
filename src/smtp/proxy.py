@@ -21,13 +21,14 @@ class SMTPProxyServer:
     def __init__(
         self,
         config_path: Path,
+        accounts_path: Path,
         settings: Settings
     ):
         self.config_path = config_path
+        self.accounts_path = accounts_path
         self.settings = settings
 
-        # ✅ Load ProxyConfig from same file (config.json contains everything)
-        # First try loading from the same file
+        # Load ProxyConfig from config.json (global settings + provider defaults)
         if config_path.exists():
             self.proxy_config = ProxyConfig(config_path)
             logger.info(f"[SMTPProxyServer] Loaded proxy config from {config_path}")
@@ -36,8 +37,8 @@ class SMTPProxyServer:
             self.proxy_config = ProxyConfig()
             logger.info("[SMTPProxyServer] Using built-in provider defaults")
 
-        # ✅ Initialize components with proxy_config
-        self.account_manager = AccountManager(config_path, proxy_config=self.proxy_config)
+        # Initialize AccountManager with separate accounts.json file
+        self.account_manager = AccountManager(accounts_path, proxy_config=self.proxy_config)
 
         # ✅ Use oauth2_timeout from proxy_config (not settings)
         oauth2_timeout = self.proxy_config.global_config.oauth2_timeout
