@@ -80,7 +80,8 @@ class SMTPConnectionPool:
         account_email: str,
         smtp_host: str,
         smtp_port: int,
-        xoauth2_string: str
+        xoauth2_string: str,
+        account = None  # ✅ NEW: Account object for per-account settings
     ) -> aiosmtplib.SMTP:
         """
         Acquire SMTP connection from pool or create new one
@@ -90,10 +91,21 @@ class SMTPConnectionPool:
             smtp_host: SMTP server hostname
             smtp_port: SMTP server port
             xoauth2_string: Pre-constructed XOAUTH2 auth string (NOT base64 encoded)
+            account: AccountConfig object with per-account settings (optional, uses pool defaults if None)
 
         Returns:
             Connected and authenticated SMTP connection
         """
+        # ✅ Get per-account settings (or use pool defaults)
+        if account:
+            pool_config = account.get_connection_pool_config()
+            max_conn = pool_config.max_connections_per_account
+            max_msg = pool_config.max_messages_per_connection
+        else:
+            # Fallback to pool defaults if no account provided
+            max_conn = self.max_connections_per_account
+            max_msg = self.max_messages_per_connection
+
         # Get or create lock and semaphore for this account (dict lock held for microseconds only!)
         if account_email not in self.locks:
             async with self._dict_lock:
@@ -101,8 +113,8 @@ class SMTPConnectionPool:
                 if account_email not in self.locks:
                     self.locks[account_email] = asyncio.Lock()
                     self.pools[account_email] = deque()  # Use deque, not list
-                    # ✅ Semaphore for fair queueing when all connections busy
-                    self.semaphores[account_email] = asyncio.Semaphore(self.max_connections_per_account)
+                    # ✅ Semaphore with per-account max_connections (uses account-specific setting!)
+                    self.semaphores[account_email] = asyncio.Semaphore(max_conn)
 
         lock = self.locks[account_email]
         semaphore = self.semaphores[account_email]
@@ -134,10 +146,10 @@ class SMTPConnectionPool:
                         to_remove.append(pooled)
                         continue
 
-                    # Check if connection used too many times
-                    if pooled.message_count >= self.max_messages_per_connection:
+                    # Check if connection used too many times (✅ uses per-account setting!)
+                    if pooled.message_count >= max_msg:
                         logger.debug(
-                            f"[Pool] Connection reached max messages ({pooled.message_count}) "
+                            f"[Pool] Connection reached max messages ({pooled.message_count}/{max_msg}) "
                             f"for {account_email}"
                         )
                         await self._close_connection(pooled)

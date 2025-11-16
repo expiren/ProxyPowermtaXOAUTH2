@@ -110,15 +110,26 @@ class OAuth2Manager:
 
         try:
             # Use circuit breaker per provider to prevent cascading failures
+            # ✅ Get per-account circuit breaker config (or provider defaults)
+            cb_config = account.get_circuit_breaker_config() if account else None
             breaker = await self.circuit_breaker_manager.get_or_create(
-                f"oauth2_{account.provider}"
+                f"oauth2_{account.provider}",
+                failure_threshold=cb_config.failure_threshold if cb_config else 5,
+                recovery_timeout=cb_config.recovery_timeout_seconds if cb_config else 60
             )
 
             # Circuit breaker wraps retry logic:
             # 1. Circuit breaker prevents calls if provider is known to be down
             # 2. Retry handles transient failures (network hiccups)
             # 3. If retry fails, circuit breaker tracks the failure
-            retry_config = RetryConfig(max_attempts=2)
+            # ✅ Use per-account retry config (or provider defaults)
+            retry_cfg = account.get_retry_config() if account else None
+            retry_config = RetryConfig(
+                max_attempts=retry_cfg.max_attempts if retry_cfg else 2,
+                initial_delay=retry_cfg.initial_delay_ms / 1000 if retry_cfg else 1.0,
+                max_delay=retry_cfg.max_delay_ms / 1000 if retry_cfg else 10.0,
+                exponential_base=retry_cfg.exponential_base if retry_cfg else 2.0
+            )
 
             # Wrap retry with circuit breaker
             token = await breaker.call(
