@@ -27,7 +27,6 @@ class AccountManager:
 
     async def load(self) -> int:
         """Load accounts from config file with proxy config merging"""
-        from src.config.loader import ConfigLoader
         # ✅ Pass proxy_config to ConfigLoader
         accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
