@@ -386,8 +386,8 @@ class SMTPProxyHandler(asyncio.Protocol):
             try:
                 async with self.current_account.lock:
                     self.current_account.concurrent_messages -= 1
-            except:
-                pass
+            except Exception as counter_error:
+                logger.debug(f"[{self.current_account.email}] Error decrementing concurrent_messages counter: {counter_error}")
 
             self.send_response(450, "4.4.2 Temporary service failure")
 

@@ -157,8 +157,8 @@ class UpstreamRelay:
                     # Close bad connection
                     try:
                         await connection.quit()
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[{account.email}] Error closing connection after MAIL FROM rejection: {e}")
                     return (False, code, msg)
 
                 # RCPT TO (for each recipient - typically just one)
@@ -176,8 +176,8 @@ class UpstreamRelay:
                     # Close bad connection
                     try:
                         await connection.quit()
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[{account.email}] Error closing connection after RCPT rejection: {e}")
                     return (False, 553, "5.1.3 All recipients rejected")
 
                 # DATA (send message body)
@@ -188,8 +188,8 @@ class UpstreamRelay:
                     # Close bad connection
                     try:
                         await connection.quit()
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[{account.email}] Error closing connection after DATA rejection: {e}")
                     return (False, code, msg)
 
                 # ✅ SUCCESS - Return connection to pool (KEEP ALIVE for reuse)
@@ -214,8 +214,8 @@ class UpstreamRelay:
                 await self.connection_pool.release(account.email, connection, increment_count=False)
                 try:
                     await connection.quit()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[{account.email}] Error closing connection after timeout: {e}")
 
                 return (False, 450, "4.4.2 Connection timeout")
 
@@ -225,8 +225,8 @@ class UpstreamRelay:
                 await self.connection_pool.release(account.email, connection, increment_count=False)
                 try:
                     await connection.quit()
-                except:
-                    pass
+                except Exception as quit_error:
+                    logger.debug(f"[{account.email}] Error closing connection after send error: {quit_error}")
 
                 # Parse error for better response
                 error_str = str(e).lower()
