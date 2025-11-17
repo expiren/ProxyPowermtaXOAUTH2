@@ -13,9 +13,13 @@ class Settings:
     are configured via ProxyConfig (loaded from config.json), not here.
     """
 
-    # Server settings
+    # SMTP Server settings
     host: str = "127.0.0.1"
     port: int = 2525
+
+    # Admin HTTP Server settings
+    admin_host: str = "127.0.0.1"
+    admin_port: int = 9090
 
     # Global concurrency
     global_concurrency_limit: int = 100
@@ -29,6 +33,8 @@ class Settings:
         return cls(
             host=os.getenv('XOAUTH2_HOST', '127.0.0.1'),
             port=int(os.getenv('XOAUTH2_PORT', 2525)),
+            admin_host=os.getenv('XOAUTH2_ADMIN_HOST', '127.0.0.1'),
+            admin_port=int(os.getenv('XOAUTH2_ADMIN_PORT', 9090)),
             global_concurrency_limit=int(os.getenv('XOAUTH2_GLOBAL_CONCURRENCY', 100)),
             dry_run=os.getenv('XOAUTH2_DRY_RUN', 'false').lower() == 'true',
         )

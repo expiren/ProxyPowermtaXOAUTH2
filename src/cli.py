@@ -51,6 +51,21 @@ Examples:
         help='Listen port (default: 2525)'
     )
 
+    # Admin HTTP server settings
+    parser.add_argument(
+        '--admin-host',
+        type=str,
+        default='127.0.0.1',
+        help='Admin HTTP server host (default: 127.0.0.1, use 0.0.0.0 for remote access)'
+    )
+
+    parser.add_argument(
+        '--admin-port',
+        type=int,
+        default=9090,
+        help='Admin HTTP server port (default: 9090)'
+    )
+
     # Performance tuning
     parser.add_argument(
         '--global-concurrency',
@@ -81,6 +96,8 @@ def create_settings(args: argparse.Namespace) -> Settings:
     return Settings(
         host=args.host,
         port=args.port,
+        admin_host=args.admin_host,
+        admin_port=args.admin_port,
         global_concurrency_limit=args.global_concurrency,
         dry_run=args.dry_run,
     )

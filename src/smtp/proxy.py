@@ -11,6 +11,7 @@ from src.accounts.manager import AccountManager
 from src.smtp.handler import SMTPProxyHandler
 from src.smtp.upstream import UpstreamRelay
 from src.utils.rate_limiter import RateLimiter
+from src.admin.server import AdminServer
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -67,6 +68,15 @@ class SMTPProxyServer:
         # ✅ Global semaphore for backpressure
         self.global_semaphore = asyncio.Semaphore(self.proxy_config.global_config.global_concurrency_limit)
 
+        # Admin HTTP server for managing accounts via API
+        self.admin_server = AdminServer(
+            accounts_path=accounts_path,
+            account_manager=self.account_manager,
+            oauth_manager=self.oauth_manager,
+            host=settings.admin_host,
+            port=settings.admin_port
+        )
+
         self.server = None
 
     async def initialize(self) -> int:
@@ -116,6 +126,9 @@ class SMTPProxyServer:
             # Initialize
             num_accounts = await self.initialize()
 
+            # Start admin HTTP server
+            await self.admin_server.start()
+
             logger.info(
                 f"Starting XOAUTH2 proxy on {self.settings.host}:{self.settings.port} "
                 f"({num_accounts} accounts)"
@@ -164,6 +177,9 @@ class SMTPProxyServer:
         if self.server:
             self.server.close()
             await self.server.wait_closed()
+
+        # Shutdown admin server
+        await self.admin_server.shutdown()
 
         await self.upstream_relay.shutdown()
         await self.oauth_manager.cleanup()
