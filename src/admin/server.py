@@ -555,7 +555,20 @@ class AdminServer:
         """Shutdown the admin server"""
         logger.info("[AdminServer] Shutting down admin server...")
 
-        if self.runner:
-            await self.runner.cleanup()
+        try:
+            # Stop the site first if it exists
+            if self.site:
+                await self.site.stop()
+                logger.debug("[AdminServer] Site stopped")
+        except Exception as e:
+            logger.warning(f"[AdminServer] Error stopping site: {e}")
+
+        try:
+            # Clean up the runner
+            if self.runner:
+                await self.runner.cleanup()
+                logger.debug("[AdminServer] Runner cleaned up")
+        except Exception as e:
+            logger.warning(f"[AdminServer] Error cleaning up runner: {e}")
 
         logger.info("[AdminServer] Admin server stopped")
