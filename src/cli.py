@@ -55,8 +55,8 @@ Examples:
     parser.add_argument(
         '--admin-host',
         type=str,
-        default='127.0.0.1',
-        help='Admin HTTP server host (default: 127.0.0.1, use 0.0.0.0 for remote access)'
+        default='0.0.0.0',
+        help='Admin HTTP server host (default: 0.0.0.0 for internet access, use 127.0.0.1 for localhost only)'
     )
 
     parser.add_argument(
