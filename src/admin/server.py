@@ -310,6 +310,192 @@ class AdminServer:
                 status=500
             )
 
+    async def handle_delete_account(self, request: web.Request) -> web.Response:
+        """Handle DELETE /admin/accounts/{email} - Delete a specific account"""
+        try:
+            email = request.match_info.get('email', '').strip()
+
+            if not email:
+                return web.json_response(
+                    {'success': False, 'error': 'Email parameter is required'},
+                    status=400
+                )
+
+            # Validate email format
+            if not self._validate_email(email):
+                return web.json_response(
+                    {'success': False, 'error': 'Invalid email format'},
+                    status=400
+                )
+
+            # Load accounts
+            accounts = self._load_accounts()
+
+            # Find and remove account
+            original_count = len(accounts)
+            accounts = [acc for acc in accounts if acc.get('email') != email]
+
+            if len(accounts) == original_count:
+                return web.json_response(
+                    {'success': False, 'error': f'Account {email} not found'},
+                    status=404
+                )
+
+            # Save updated accounts
+            if not self._save_accounts(accounts):
+                return web.json_response(
+                    {'success': False, 'error': 'Failed to save accounts to file'},
+                    status=500
+                )
+
+            logger.info(f"[AdminServer] Account {email} deleted successfully ({len(accounts)} remaining)")
+
+            # Trigger hot-reload
+            try:
+                num_accounts = await self.account_manager.reload()
+                logger.info(f"[AdminServer] Accounts reloaded: {num_accounts} accounts active")
+            except Exception as e:
+                logger.error(f"[AdminServer] Error reloading accounts: {e}")
+
+            return web.json_response({
+                'success': True,
+                'message': f'Account {email} deleted successfully',
+                'total_accounts': len(accounts)
+            })
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Error deleting account: {e}", exc_info=True)
+            return web.json_response(
+                {'success': False, 'error': f'Internal server error: {str(e)}'},
+                status=500
+            )
+
+    async def handle_delete_all_accounts(self, request: web.Request) -> web.Response:
+        """Handle DELETE /admin/accounts - Delete all accounts (requires confirmation)"""
+        try:
+            # Require explicit confirmation to prevent accidental deletion
+            confirm = request.rel_url.query.get('confirm', '').lower()
+
+            if confirm != 'true':
+                return web.json_response(
+                    {
+                        'success': False,
+                        'error': 'Confirmation required. Use ?confirm=true to delete all accounts'
+                    },
+                    status=400
+                )
+
+            # Load accounts
+            accounts = self._load_accounts()
+            original_count = len(accounts)
+
+            if original_count == 0:
+                return web.json_response(
+                    {'success': False, 'error': 'No accounts to delete'},
+                    status=404
+                )
+
+            # Delete all accounts
+            if not self._save_accounts([]):
+                return web.json_response(
+                    {'success': False, 'error': 'Failed to save accounts to file'},
+                    status=500
+                )
+
+            logger.warning(f"[AdminServer] All accounts deleted ({original_count} accounts removed)")
+
+            # Trigger hot-reload
+            try:
+                num_accounts = await self.account_manager.reload()
+                logger.info(f"[AdminServer] Accounts reloaded: {num_accounts} accounts active")
+            except Exception as e:
+                logger.error(f"[AdminServer] Error reloading accounts: {e}")
+
+            return web.json_response({
+                'success': True,
+                'message': f'All accounts deleted ({original_count} accounts removed)',
+                'total_accounts': 0
+            })
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Error deleting all accounts: {e}", exc_info=True)
+            return web.json_response(
+                {'success': False, 'error': f'Internal server error: {str(e)}'},
+                status=500
+            )
+
+    async def handle_delete_invalid_accounts(self, request: web.Request) -> web.Response:
+        """Handle DELETE /admin/accounts/invalid - Delete accounts with bad OAuth2 credentials"""
+        try:
+            # Load accounts
+            accounts = self._load_accounts()
+            original_count = len(accounts)
+
+            if original_count == 0:
+                return web.json_response(
+                    {'success': False, 'error': 'No accounts to check'},
+                    status=404
+                )
+
+            # Test each account's OAuth2 credentials
+            logger.info(f"[AdminServer] Testing {original_count} accounts for validity...")
+
+            valid_accounts = []
+            invalid_accounts = []
+
+            for account in accounts:
+                success, message = await self._verify_oauth_credentials(account)
+
+                if success:
+                    valid_accounts.append(account)
+                    logger.info(f"[AdminServer] ✓ {account['email']} - Valid")
+                else:
+                    invalid_accounts.append(account['email'])
+                    logger.warning(f"[AdminServer] ✗ {account['email']} - Invalid: {message}")
+
+            # If no invalid accounts found
+            if len(invalid_accounts) == 0:
+                return web.json_response({
+                    'success': True,
+                    'message': 'No invalid accounts found',
+                    'total_accounts': len(valid_accounts),
+                    'deleted_count': 0,
+                    'deleted_accounts': []
+                })
+
+            # Save only valid accounts
+            if not self._save_accounts(valid_accounts):
+                return web.json_response(
+                    {'success': False, 'error': 'Failed to save accounts to file'},
+                    status=500
+                )
+
+            logger.warning(
+                f"[AdminServer] Deleted {len(invalid_accounts)} invalid accounts: {', '.join(invalid_accounts)}"
+            )
+
+            # Trigger hot-reload
+            try:
+                num_accounts = await self.account_manager.reload()
+                logger.info(f"[AdminServer] Accounts reloaded: {num_accounts} accounts active")
+            except Exception as e:
+                logger.error(f"[AdminServer] Error reloading accounts: {e}")
+
+            return web.json_response({
+                'success': True,
+                'message': f'Deleted {len(invalid_accounts)} invalid accounts',
+                'total_accounts': len(valid_accounts),
+                'deleted_count': len(invalid_accounts),
+                'deleted_accounts': invalid_accounts
+            })
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Error deleting invalid accounts: {e}", exc_info=True)
+            return web.json_response(
+                {'success': False, 'error': f'Internal server error: {str(e)}'},
+                status=500
+            )
+
     async def start(self):
         """Start the admin HTTP server"""
         try:
@@ -319,6 +505,9 @@ class AdminServer:
             self.app.router.add_get('/health', self.handle_health)
             self.app.router.add_get('/admin/accounts', self.handle_list_accounts)
             self.app.router.add_post('/admin/accounts', self.handle_add_account)
+            self.app.router.add_delete('/admin/accounts/{email}', self.handle_delete_account)
+            self.app.router.add_delete('/admin/accounts/invalid', self.handle_delete_invalid_accounts)
+            self.app.router.add_delete('/admin/accounts', self.handle_delete_all_accounts)
 
             # Setup runner
             self.runner = web.AppRunner(self.app)
@@ -332,6 +521,9 @@ class AdminServer:
             logger.info(f"[AdminServer] Health check: GET http://{self.host}:{self.port}/health")
             logger.info(f"[AdminServer] List accounts: GET http://{self.host}:{self.port}/admin/accounts")
             logger.info(f"[AdminServer] Add account: POST http://{self.host}:{self.port}/admin/accounts")
+            logger.info(f"[AdminServer] Delete account: DELETE http://{self.host}:{self.port}/admin/accounts/{{email}}")
+            logger.info(f"[AdminServer] Delete invalid: DELETE http://{self.host}:{self.port}/admin/accounts/invalid")
+            logger.info(f"[AdminServer] Delete all: DELETE http://{self.host}:{self.port}/admin/accounts?confirm=true")
 
         except Exception as e:
             logger.error(f"[AdminServer] Failed to start admin server: {e}")
