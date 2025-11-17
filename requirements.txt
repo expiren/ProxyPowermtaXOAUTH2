@@ -2,7 +2,6 @@
 # Python 3.8+ required
 
 # Core async SMTP server (legacy, replaced by asyncio.Protocol)
-aiosmtpd>=1.4.4
 
 # Async SMTP client for upstream relay (NEW - for connection pooling and 50k+ msg/min)
 aiosmtplib>=3.0.0
