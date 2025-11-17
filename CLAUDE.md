@@ -78,8 +78,13 @@ src/
 │   ├── connection_pool.py  # Connection pooling utilities
 │   └── exceptions.py       # Utility exceptions
 │
+├── tools/             # Management tools
+│   └── add_account.py # Interactive account addition tool
+│
 ├── cli.py             # CLI argument parsing
 └── main.py            # Application entry point, signal handlers
+
+add_account.py         # Standalone wrapper for adding accounts
 
 archive/               # Original monolithic implementations
 ├── xoauth2_proxy.py          # Original 1100-line proxy
@@ -207,6 +212,14 @@ python -m src.main --config accounts.json
 ### Working with Accounts
 
 ```bash
+# Add a new account interactively (RECOMMENDED)
+python add_account.py
+# Or: python -m src.tools.add_account
+# Or (if installed): xoauth2-add-account
+
+# Add account to custom file
+python add_account.py /path/to/accounts.json
+
 # Validate accounts.json
 python -c "import json; json.load(open('accounts.json'))"
 

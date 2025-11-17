@@ -39,6 +39,7 @@ setup(
     entry_points={
         "console_scripts": [
             "xoauth2-proxy=src.main:main",
+            "xoauth2-add-account=src.tools.add_account:main",
         ],
     },
     classifiers=[
