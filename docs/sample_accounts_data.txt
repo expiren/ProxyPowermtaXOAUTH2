@@ -1,0 +1,9 @@
+# Sample account data file
+# Format: email,account_id,refresh_token,client_id,timestamp,hostname
+# Note: Only email, account_id, refresh_token, and client_id are required
+# The rest are optional and will be auto-generated
+
+pilareffiema0407@hotmail.com,pilare_acc1,M.C519_BAY.0.U.-Cuf!4ApwaD8lIRZ0tUolkrH1L8ZYlRhnqvr09NNipvtQgSV00YM*wb0PhghbIcMeNta2bPpS45tBqAv7C5aj7haniH0J9cxKVVagIg16criZcxQrhAb6XXARazSXNWfotKce8WfnN2rlTM5*mdLe5dVOlfgDGw4rXJEqAqGq9hNQ4veC7K!DfSrOibD6DgjRnib1RY922DTf1QzSUuV71lz4Pm5r5LhdJxsV4dugeceI0P*apnf6C1S*CX6gY3bHqIlA*Ulo39WjwaOE*gwKoXEUQZizlINuTftvoWuOn!yUExXzftGiu*qXfBuc33PiRpJdc*y484m4UqsyqXWB7P!KqSI*5btuPmKeDJN1wzpzzalwJeAvIh!yzCfxNSx3!aWJE1dcrVpohwUJgexvlF4nTJ9TbDIY8EehFEeIMw*9uqfIwuoc2tCk9DVfd*8r!g$$,9e5f94bc-e8a4-4e73-b8be-63364c29d753,2025-09-24T00:00:00.0000000Z,localhost
+user2@gmail.com,gmail_acc1,1//0gJA7asfdZKRE8z...your_gmail_refresh_token_1,558976430978-xxxxxxxxxxxxxxx.apps.googleusercontent.com,2025-09-24T00:00:00.0000000Z,localhost
+user3@outlook.com,outlook_acc1,M.C538_BAY.0.U.-Cs20*HMW5C11W!geWTLHS1KcDu42jwiBSvzYR1!7WTuZCw1z5DCQvU60Y!qlh38lkaRNkZLOXej1VWWhRgiUj58MCrglymD0!8QrdO99FDi!jilr!KuG5ACo8EBK5fy5LFxaxH9fYY0kJ9TRhYuhOuV5n5bIUkuu4L7BMx2myWBRQhWqQk2z8ffTQkNPU5gBDFefHyVSsZY4kezDcGJbHA!av2fwUk3OI8Dg1qE9CXHoh05lm0nw9rsN!9XZWlZwTrZm9teVjHp4!zZUe8SD7EiWptOSTlXl0NO3E!jqM1Bpqd86TKz1tgdVOo2Ng1WVai26gyowe4HXOqcQ5GiKRhdQC9Amen4eGHyfF4sIjn6ZZZOGpq21lv2YnwMLV8lvrgiB5yLYIixOlKAAQMXQNmcpYChcy5ka3EkHxz2JipAY,9e5f94bc-e8a4-4e73-b8be-63364c29d753,2025-09-24T00:00:00.0000000Z,localhost
+user4@hotmail.com,hotmail_acc1,M.R3_BAY.0.U.-Cs20*HMW5C11W!geWTLHS1KcDu42jwiBSvzYR1!test_token,9e5f94bc-e8a4-4e73-b8be-63364c29d754,2025-09-24T00:00:00.0000000Z,localhost
