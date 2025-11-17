@@ -118,9 +118,27 @@ def prompt_account_details() -> Optional[Dict[str, Any]]:
             break
         print("✗ Provider must be 'gmail' or 'outlook'. Please try again.")
 
-    # Auto-detect oauth_endpoint
+    # Auto-detect oauth_endpoint (SMTP endpoint)
     oauth_endpoint = get_oauth_endpoint(provider)
     print(f"SMTP endpoint: {oauth_endpoint} (auto-detected)")
+
+    # Auto-detect oauth_token_url (OAuth2 token endpoint)
+    oauth_token_url = get_token_url(provider)
+    print(f"OAuth2 token URL: {oauth_token_url} (auto-detected)")
+
+    # IP Address (optional for source IP binding)
+    ip_address = input("IP Address (optional, press Enter to skip): ").strip()
+    if ip_address:
+        print(f"Source IP: {ip_address}")
+    else:
+        print("Source IP: Not set (will not use source IP binding for this account)")
+
+    # Auto-generate account_id and vmta_name (with option to override)
+    default_account_id = f"{provider}_{email.replace('@', '_').replace('.', '_')}"
+    account_id = input(f"Account ID [default: {default_account_id}]: ").strip() or default_account_id
+
+    default_vmta_name = f"vmta-{provider}-{email.split('@')[0]}"
+    vmta_name = input(f"VMTA Name [default: {default_vmta_name}]: ").strip() or default_vmta_name
 
     # Client ID
     while True:
@@ -142,11 +160,15 @@ def prompt_account_details() -> Optional[Dict[str, Any]]:
             break
         print("✗ Refresh Token cannot be empty.")
 
-    # Build account object
+    # Build account object (with all required fields)
     account = {
+        'account_id': account_id,
         'email': email,
+        'ip_address': ip_address,
+        'vmta_name': vmta_name,
         'provider': provider,
         'oauth_endpoint': oauth_endpoint,
+        'oauth_token_url': oauth_token_url,
         'client_id': client_id,
         'refresh_token': refresh_token
     }
