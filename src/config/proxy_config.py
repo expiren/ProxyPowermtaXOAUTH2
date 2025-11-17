@@ -109,6 +109,44 @@ class ProviderConfig:
 
 
 @dataclass
+class OAuth2Config:
+    """OAuth2 token management configuration"""
+    token_refresh_buffer_seconds: int = 300
+    token_cache_ttl_seconds: int = 60
+    token_default_lifetime_seconds: int = 3600
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'OAuth2Config':
+        """Create from dictionary"""
+        return cls(
+            token_refresh_buffer_seconds=data.get('token_refresh_buffer_seconds', 300),
+            token_cache_ttl_seconds=data.get('token_cache_ttl_seconds', 60),
+            token_default_lifetime_seconds=data.get('token_default_lifetime_seconds', 3600),
+        )
+
+
+@dataclass
+class HTTPPoolConfig:
+    """HTTP connection pool configuration for OAuth2 API requests"""
+    total_connections: int = 500
+    connections_per_host: int = 100
+    dns_cache_ttl_seconds: int = 300
+    connect_timeout_seconds: int = 5
+    max_retries: int = 3
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'HTTPPoolConfig':
+        """Create from dictionary"""
+        return cls(
+            total_connections=data.get('total_connections', 500),
+            connections_per_host=data.get('connections_per_host', 100),
+            dns_cache_ttl_seconds=data.get('dns_cache_ttl_seconds', 300),
+            connect_timeout_seconds=data.get('connect_timeout_seconds', 5),
+            max_retries=data.get('max_retries', 3),
+        )
+
+
+@dataclass
 class GlobalConfig:
     """Global proxy configuration"""
     global_concurrency_limit: int = 100
@@ -116,12 +154,16 @@ class GlobalConfig:
     connection_backlog: int = 100
     oauth2_timeout: int = 10
     connection_acquire_timeout: int = 5
+    oauth2: OAuth2Config = field(default_factory=OAuth2Config)
+    http_pool: HTTPPoolConfig = field(default_factory=HTTPPoolConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GlobalConfig':
         """Create from dictionary"""
         concurrency = data.get('concurrency', {})
         timeouts = data.get('timeouts', {})
+        oauth2 = data.get('oauth2', {})
+        http_pool = data.get('http_pool', {})
 
         return cls(
             global_concurrency_limit=concurrency.get('global_concurrency_limit', 100),
@@ -129,6 +171,8 @@ class GlobalConfig:
             connection_backlog=concurrency.get('connection_backlog', 100),
             oauth2_timeout=timeouts.get('oauth2_timeout', 10),
             connection_acquire_timeout=timeouts.get('connection_acquire_timeout', 5),
+            oauth2=OAuth2Config.from_dict(oauth2),
+            http_pool=HTTPPoolConfig.from_dict(http_pool),
         )
 
 
