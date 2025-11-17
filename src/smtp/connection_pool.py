@@ -486,26 +486,34 @@ class SMTPConnectionPool:
 
     async def cleanup_idle_connections(self):
         """Background task to cleanup idle connections (parallelized per account)"""
-        while True:
-            try:
-                await asyncio.sleep(30)  # Run every 30 seconds
+        try:
+            while True:
+                try:
+                    await asyncio.sleep(30)  # Run every 30 seconds
 
-                # Get snapshot of accounts (no lock needed for list() on dict.keys())
-                accounts = list(self.pools.keys())
+                    # Get snapshot of accounts (no lock needed for list() on dict.keys())
+                    accounts = list(self.pools.keys())
 
-                # Cleanup all accounts in parallel (huge speedup!)
-                cleanup_tasks = [
-                    self._cleanup_account(account_email)
-                    for account_email in accounts
-                    if account_email in self.locks
-                ]
+                    # Cleanup all accounts in parallel (huge speedup!)
+                    cleanup_tasks = [
+                        self._cleanup_account(account_email)
+                        for account_email in accounts
+                        if account_email in self.locks
+                    ]
 
-                if cleanup_tasks:
-                    # Wait for all cleanups to complete concurrently
-                    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+                    if cleanup_tasks:
+                        # Wait for all cleanups to complete concurrently
+                        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-            except Exception as e:
-                logger.error(f"[Pool] Error in cleanup task: {e}")
+                except asyncio.CancelledError:
+                    # Task is being cancelled during shutdown
+                    logger.debug("[Pool] Cleanup task cancelled during shutdown")
+                    raise  # Re-raise to properly cancel the task
+                except Exception as e:
+                    logger.error(f"[Pool] Error in cleanup task: {e}")
+        except asyncio.CancelledError:
+            # Final cancellation handling
+            logger.debug("[Pool] Cleanup task terminated")
 
     async def _cleanup_account(self, account_email: str):
         """Cleanup connections for a single account (called in parallel)"""

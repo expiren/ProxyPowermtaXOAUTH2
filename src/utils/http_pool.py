@@ -82,11 +82,17 @@ class HTTPSessionPool:
         """Close session (thread-safe)"""
         async with self._init_lock:
             if hasattr(self, 'session') and self.session:
-                await self.session.close()
-                # Give time for connections to close gracefully
-                await asyncio.sleep(0.25)
-                self._initialized = False
-                logger.info("[HTTPPool] Async HTTP session closed")
+                try:
+                    # Close the session
+                    await self.session.close()
+                    # Wait for the connector to close all connections
+                    # This prevents "Unclosed client session" warnings
+                    await asyncio.sleep(0.5)
+                    self._initialized = False
+                    logger.info("[HTTPPool] Async HTTP session closed")
+                except Exception as e:
+                    logger.warning(f"[HTTPPool] Error during session close: {e}")
+                    self._initialized = False
 
     def get_session(self) -> aiohttp.ClientSession:
         """Get HTTP session"""
