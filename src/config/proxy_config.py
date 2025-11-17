@@ -147,6 +147,29 @@ class HTTPPoolConfig:
 
 
 @dataclass
+class SMTPConfig:
+    """SMTP protocol configuration"""
+    server_hostname: str = "xoauth2-proxy"
+    max_message_size: int = 52428800  # 50 MB
+    max_recipients: int = 1000
+    max_line_length: int = 1000
+    use_source_ip_binding: bool = True
+    validate_source_ip: bool = True
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SMTPConfig':
+        """Create from dictionary"""
+        return cls(
+            server_hostname=data.get('server_hostname', 'xoauth2-proxy'),
+            max_message_size=data.get('max_message_size', 52428800),
+            max_recipients=data.get('max_recipients', 1000),
+            max_line_length=data.get('max_line_length', 1000),
+            use_source_ip_binding=data.get('use_source_ip_binding', True),
+            validate_source_ip=data.get('validate_source_ip', True),
+        )
+
+
+@dataclass
 class GlobalConfig:
     """Global proxy configuration"""
     global_concurrency_limit: int = 100
@@ -156,6 +179,7 @@ class GlobalConfig:
     connection_acquire_timeout: int = 5
     oauth2: OAuth2Config = field(default_factory=OAuth2Config)
     http_pool: HTTPPoolConfig = field(default_factory=HTTPPoolConfig)
+    smtp: SMTPConfig = field(default_factory=SMTPConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GlobalConfig':
@@ -164,6 +188,7 @@ class GlobalConfig:
         timeouts = data.get('timeouts', {})
         oauth2 = data.get('oauth2', {})
         http_pool = data.get('http_pool', {})
+        smtp = data.get('smtp', {})
 
         return cls(
             global_concurrency_limit=concurrency.get('global_concurrency_limit', 100),
@@ -173,6 +198,7 @@ class GlobalConfig:
             connection_acquire_timeout=timeouts.get('connection_acquire_timeout', 5),
             oauth2=OAuth2Config.from_dict(oauth2),
             http_pool=HTTPPoolConfig.from_dict(http_pool),
+            smtp=SMTPConfig.from_dict(smtp),
         )
 
 

@@ -3,11 +3,14 @@
 import asyncio
 import base64
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 from collections import deque
 import aiosmtplib
+
+if TYPE_CHECKING:
+    from src.config.proxy_config import SMTPConfig
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -42,12 +45,27 @@ class SMTPConnectionPool:
         max_connections_per_account: int = 50,
         max_messages_per_connection: int = 100,
         connection_max_age: int = 300,
-        connection_idle_timeout: int = 60
+        connection_idle_timeout: int = 60,
+        smtp_config: Optional['SMTPConfig'] = None  # ✅ SMTP configuration for IP binding
     ):
         self.max_connections_per_account = max_connections_per_account
         self.max_messages_per_connection = max_messages_per_connection
         self.connection_max_age = connection_max_age
         self.connection_idle_timeout = connection_idle_timeout
+        self.smtp_config = smtp_config  # ✅ Store SMTP config
+
+        # ✅ Cache server IPs if validation is enabled (avoid repeated lookups)
+        self.server_ips_cache = None
+        self.ips_cached_at = None
+        if smtp_config and smtp_config.use_source_ip_binding and smtp_config.validate_source_ip:
+            # Import here to avoid circular dependency
+            from src.utils.network import get_server_ips
+            self.server_ips_cache = get_server_ips()
+            self.ips_cached_at = datetime.now(UTC)
+            logger.info(
+                f"[SMTPConnectionPool] Source IP validation enabled. "
+                f"Found {len(self.server_ips_cache)} IPs on server"
+            )
 
         # Pool: account_email -> deque of PooledConnection (O(1) operations!)
         # Using deque instead of list for better performance:
@@ -218,12 +236,35 @@ class SMTPConnectionPool:
                         # This should never happen with semaphore, but handle gracefully
                         raise Exception(f"Pool exhausted for {account_email} despite semaphore")
 
+                # ✅ Get source IP from account config (if enabled in config)
+                source_ip = None
+                if self.smtp_config and self.smtp_config.use_source_ip_binding:
+                    if account and hasattr(account, 'ip_address') and account.ip_address:
+                        source_ip = account.ip_address.strip()
+
+                        if source_ip:
+                            # ✅ Validate IP if validation is enabled
+                            if self.smtp_config.validate_source_ip:
+                                from src.utils.network import is_ip_available_on_server
+
+                                if not is_ip_available_on_server(source_ip, self.server_ips_cache):
+                                    logger.error(
+                                        f"[Pool] Source IP {source_ip} not available on server for {account_email}. "
+                                        f"Proceeding without IP binding."
+                                    )
+                                    source_ip = None  # Don't use invalid IP
+                                else:
+                                    logger.debug(f"[Pool] Validated source IP {source_ip} for {account_email}")
+                            else:
+                                logger.debug(f"[Pool] Using source IP {source_ip} for {account_email} (validation disabled)")
+
                 # Create new connection
                 connection = await self._create_connection(
                     account_email,
                     smtp_host,
                     smtp_port,
-                    xoauth2_string
+                    xoauth2_string,
+                    source_ip=source_ip  # ✅ Pass source IP
                 )
 
                 # Add to pool
@@ -341,10 +382,26 @@ class SMTPConnectionPool:
         account_email: str,
         smtp_host: str,
         smtp_port: int,
-        xoauth2_string: str
+        xoauth2_string: str,
+        source_ip: Optional[str] = None  # ✅ NEW: Source IP for outgoing connections
     ) -> aiosmtplib.SMTP:
-        """Create new authenticated SMTP connection"""
+        """Create new authenticated SMTP connection
+
+        Args:
+            account_email: Email address for this account
+            smtp_host: SMTP server hostname
+            smtp_port: SMTP server port
+            xoauth2_string: Pre-constructed XOAUTH2 auth string
+            source_ip: Source IP address to bind to (optional)
+        """
         try:
+            # ✅ Prepare source_address parameter for socket binding
+            # Format: (ip, port) where port=0 means "any available port"
+            source_address = (source_ip, 0) if source_ip else None
+
+            if source_ip:
+                logger.debug(f"[Pool] Binding connection to source IP {source_ip} for {account_email}")
+
             # Create connection
             # For port 587: use_tls=False (we'll use STARTTLS explicitly)
             # For port 465: use_tls=True (implicit TLS)
@@ -353,7 +410,8 @@ class SMTPConnectionPool:
                 port=smtp_port,
                 timeout=15,
                 use_tls=False,  # Don't use implicit TLS - we'll use STARTTLS
-                start_tls=False  # Don't auto-start TLS - we'll control it manually
+                start_tls=False,  # Don't auto-start TLS - we'll control it manually
+                source_address=source_address  # ✅ Bind to specific source IP
             )
 
             # Connect
@@ -383,8 +441,26 @@ class SMTPConnectionPool:
 
             logger.info(f"[Pool] Authenticated {account_email} with XOAUTH2")
 
+            # ✅ Log successful connection with source IP info
+            if source_ip:
+                logger.info(f"[Pool] Successfully connected from source IP {source_ip} for {account_email}")
+
             return smtp
 
+        except OSError as e:
+            # ✅ Handle IP binding errors specifically
+            if source_ip and ('Cannot assign requested address' in str(e) or 'bind' in str(e).lower()):
+                logger.error(
+                    f"[Pool] Failed to bind to source IP {source_ip} for {account_email}: {e}. "
+                    f"IP may not be configured on server. Check: ip addr show"
+                )
+                raise Exception(
+                    f"Source IP {source_ip} not available on server. "
+                    f"Configure IP or remove ip_address from account config."
+                )
+            else:
+                logger.error(f"[Pool] Connection error for {account_email}: {e}")
+                raise
         except Exception as e:
             logger.error(f"[Pool] Failed to create connection for {account_email}: {e}")
             raise

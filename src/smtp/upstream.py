@@ -4,7 +4,7 @@ import asyncio
 import logging
 import base64
 import time
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
@@ -13,6 +13,9 @@ from src.smtp.exceptions import (
     SMTPAuthenticationError, SMTPConnectionError,
     SMTPRelayError, InvalidRecipient, SMTPTimeout
 )
+
+if TYPE_CHECKING:
+    from src.config.proxy_config import SMTPConfig
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -27,7 +30,8 @@ class UpstreamRelay:
         max_messages_per_connection: int = 100,
         connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
         connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
-        rate_limiter = None  # ✅ Optional RateLimiter for per-account rate limiting
+        rate_limiter = None,  # ✅ Optional RateLimiter for per-account rate limiting
+        smtp_config: Optional['SMTPConfig'] = None  # ✅ SMTP config for IP binding
     ):
         self.oauth_manager = oauth_manager
         self.rate_limiter = rate_limiter  # ✅ Store rate limiter
@@ -37,7 +41,8 @@ class UpstreamRelay:
             max_connections_per_account=max_connections_per_account,
             max_messages_per_connection=max_messages_per_connection,
             connection_max_age=connection_max_age,  # ✅ From config
-            connection_idle_timeout=connection_idle_timeout  # ✅ From config
+            connection_idle_timeout=connection_idle_timeout,  # ✅ From config
+            smtp_config=smtp_config  # ✅ Pass SMTP config for IP binding
         )
 
         # Start cleanup task
