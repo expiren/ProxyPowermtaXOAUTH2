@@ -301,6 +301,45 @@ curl -X POST http://localhost:9090/admin/accounts \
 
 **Complete API documentation:** See `docs/ADMIN_API.md`
 
+### Account Manager (Standalone App)
+
+Manage accounts from any server using the standalone CLI application:
+
+```bash
+# Run on same server
+python account_manager.py
+
+# Connect to remote proxy
+python account_manager.py --url http://192.168.1.100:9090
+
+# Use environment variable
+export XOAUTH2_PROXY_URL=http://proxy-server:9090
+python account_manager.py
+```
+
+**Features:**
+- ✅ Interactive menu-driven interface
+- ✅ Color-coded terminal output
+- ✅ Connection testing
+- ✅ Add accounts with OAuth2 verification
+- ✅ Delete specific accounts
+- ✅ Delete all accounts (with safety confirmation)
+- ✅ Auto-delete invalid accounts (bad OAuth2 credentials)
+- ✅ List all configured accounts
+- ✅ Runs on any server (local or remote)
+
+**Menu Options:**
+1. List All Accounts
+2. Add New Account
+3. Delete Account
+4. Delete All Accounts
+5. Delete Invalid Accounts
+6. Change Proxy URL
+7. Test Connection
+0. Exit
+
+**Complete workflow guide:** See `docs/ACCOUNT_MANAGER_WORKFLOW.md`
+
 ---
 
 ## Logging
@@ -448,14 +487,24 @@ python xoauth2_proxy_v2.py --config accounts.json --log-level DEBUG
 
 ## Documentation
 
+### Core Documentation
 - **QUICK_START.md** - 3-step quick reference
 - **SETUP_ACCOUNTS.md** - Account setup and OAuth2 credentials
 - **CLAUDE.md** - Development guidance for Claude Code
+
+### Account Management
+- **docs/ACCOUNT_MANAGER_WORKFLOW.md** - Complete workflow guide for standalone management app
+- **docs/REMOTE_ACCOUNT_MANAGEMENT.md** - Remote account management via HTTP API
+- **docs/DELETE_ACCOUNTS_GUIDE.md** - Account deletion operations
+- **docs/ADD_ACCOUNT_GUIDE.md** - Interactive account addition tool
+- **docs/ADMIN_API.md** - Complete HTTP API reference
+
+### Deployment & Configuration
 - **docs/DEPLOYMENT_GUIDE.md** - Production deployment steps
 - **docs/TEST_PLAN.md** - Comprehensive testing procedures
-- **docs/OAUTH2_REAL_WORLD.md** - OAuth2 implementation details
 - **docs/CROSS_PLATFORM_SETUP.md** - Platform-specific setup
 - **docs/GMAIL_OUTLOOK_SETUP.md** - Provider-specific OAuth2 setup
+- **docs/OAUTH2_REAL_WORLD.md** - OAuth2 implementation details
 
 ---
 
