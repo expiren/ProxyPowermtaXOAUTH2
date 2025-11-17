@@ -197,14 +197,28 @@ class AdminServer:
                     status=400
                 )
 
-            # Auto-detect oauth_endpoint
+            # Auto-detect oauth_endpoint (SMTP endpoint)
             oauth_endpoint = self._get_oauth_endpoint(provider)
+
+            # Auto-detect oauth_token_url (OAuth2 token endpoint)
+            oauth_token_url = data.get('oauth_token_url') or self._get_token_url(provider)
+
+            # Generate account_id and vmta_name if not provided
+            account_id = data.get('account_id', f"{provider}_{email.replace('@', '_').replace('.', '_')}")
+            vmta_name = data.get('vmta_name', f"vmta-{provider}-{email.split('@')[0]}")
+
+            # Get IP address (optional)
+            ip_address = data.get('ip_address', '').strip()
 
             # Build account object
             account = {
+                'account_id': account_id,
                 'email': email,
+                'ip_address': ip_address,
+                'vmta_name': vmta_name,
                 'provider': provider,
                 'oauth_endpoint': oauth_endpoint,
+                'oauth_token_url': oauth_token_url,
                 'client_id': data['client_id'].strip(),
                 'refresh_token': data['refresh_token'].strip()
             }
@@ -269,9 +283,13 @@ class AdminServer:
                 'message': f'Account {email} added successfully',
                 'total_accounts': len(accounts),
                 'account': {
+                    'account_id': account['account_id'],
                     'email': account['email'],
+                    'ip_address': account['ip_address'],
+                    'vmta_name': account['vmta_name'],
                     'provider': account['provider'],
-                    'oauth_endpoint': account['oauth_endpoint']
+                    'oauth_endpoint': account['oauth_endpoint'],
+                    'oauth_token_url': account['oauth_token_url']
                 }
             })
 
@@ -290,9 +308,13 @@ class AdminServer:
             # Return without sensitive fields
             safe_accounts = [
                 {
+                    'account_id': acc.get('account_id'),
                     'email': acc.get('email'),
+                    'ip_address': acc.get('ip_address', ''),
+                    'vmta_name': acc.get('vmta_name'),
                     'provider': acc.get('provider'),
-                    'oauth_endpoint': acc.get('oauth_endpoint')
+                    'oauth_endpoint': acc.get('oauth_endpoint'),
+                    'oauth_token_url': acc.get('oauth_token_url')
                 }
                 for acc in accounts
             ]

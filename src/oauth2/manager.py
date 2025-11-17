@@ -21,8 +21,13 @@ logger = logging.getLogger('xoauth2_proxy')
 class OAuth2Manager:
     """Manages OAuth2 token refresh with pooling and caching"""
 
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        timeout: int = 10,
+        http_pool_config: Optional[Dict] = None
+    ):
         self.timeout = timeout
+        self.http_pool_config = http_pool_config or {}
         self.token_cache: Dict[str, TokenCache] = {}
         # REMOVED: global lock (caused 10-20% throughput loss!)
         # Now using per-email locks for token cache access
@@ -40,8 +45,15 @@ class OAuth2Manager:
         }
 
     async def initialize(self):
-        """Initialize HTTP connection pool"""
-        await http_pool.initialize()
+        """Initialize HTTP connection pool with configuration"""
+        # Pass config from global.http_pool settings
+        await http_pool.initialize(
+            timeout=self.timeout,
+            total_connections=self.http_pool_config.get('total_connections', 500),
+            connections_per_host=self.http_pool_config.get('connections_per_host', 100),
+            dns_cache_ttl=self.http_pool_config.get('dns_cache_ttl_seconds', 300),
+            connect_timeout=self.http_pool_config.get('connect_timeout_seconds', 5)
+        )
         logger.info("[OAuth2Manager] Initialized")
 
     async def get_or_refresh_token(

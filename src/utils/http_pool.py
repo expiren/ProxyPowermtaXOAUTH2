@@ -21,25 +21,43 @@ class HTTPSessionPool:
             cls._instance._init_lock = asyncio.Lock()
         return cls._instance
 
-    async def initialize(self, max_retries: int = 3, timeout: int = 10):
-        """Initialize HTTP session with connection pooling (thread-safe)"""
+    async def initialize(
+        self,
+        max_retries: int = 3,
+        timeout: int = 10,
+        total_connections: int = 500,
+        connections_per_host: int = 100,
+        dns_cache_ttl: int = 300,
+        connect_timeout: int = 5
+    ):
+        """
+        Initialize HTTP session with connection pooling (thread-safe)
+
+        Args:
+            max_retries: Maximum number of retries for failed requests
+            timeout: Total timeout for requests in seconds
+            total_connections: Maximum total HTTP connections across all hosts
+            connections_per_host: Maximum connections per host (Google/Microsoft OAuth2 endpoints)
+            dns_cache_ttl: DNS cache TTL in seconds
+            connect_timeout: Connection timeout in seconds
+        """
         async with self._init_lock:
             if self._initialized:
                 return
 
-            # Create connector with high concurrency settings
+            # Create connector with configurable settings
             # Note: aiohttp uses connector for connection pooling
             connector = TCPConnector(
-                limit=500,              # Total connection limit (was pool_maxsize)
-                limit_per_host=100,     # Connections per host
-                ttl_dns_cache=300,      # DNS cache TTL (5 minutes)
+                limit=total_connections,              # Total connection limit
+                limit_per_host=connections_per_host,  # Connections per host
+                ttl_dns_cache=dns_cache_ttl,          # DNS cache TTL
                 enable_cleanup_closed=True
             )
 
             # Create timeout config
             timeout_config = ClientTimeout(
                 total=timeout,
-                connect=5,
+                connect=connect_timeout,
                 sock_read=timeout
             )
 
@@ -56,7 +74,8 @@ class HTTPSessionPool:
 
             logger.info(
                 f"[HTTPPool] Async HTTP session pool initialized "
-                f"(limit=500, limit_per_host=100, timeout={timeout}s)"
+                f"(limit={total_connections}, limit_per_host={connections_per_host}, "
+                f"dns_cache_ttl={dns_cache_ttl}s, timeout={timeout}s)"
             )
 
     async def close(self):

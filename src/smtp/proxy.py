@@ -41,10 +41,19 @@ class SMTPProxyServer:
         # Initialize AccountManager with separate accounts.json file
         self.account_manager = AccountManager(accounts_path, proxy_config=self.proxy_config)
 
-        # ✅ Use oauth2_timeout from proxy_config (not settings)
+        # ✅ Use oauth2_timeout and http_pool config from proxy_config
         oauth2_timeout = self.proxy_config.global_config.oauth2_timeout
-        self.oauth_manager = OAuth2Manager(timeout=oauth2_timeout)
-        logger.debug(f"[SMTPProxyServer] OAuth2Manager initialized (timeout={oauth2_timeout}s)")
+        http_pool_config = {
+            'total_connections': self.proxy_config.global_config.http_pool.total_connections,
+            'connections_per_host': self.proxy_config.global_config.http_pool.connections_per_host,
+            'dns_cache_ttl_seconds': self.proxy_config.global_config.http_pool.dns_cache_ttl_seconds,
+            'connect_timeout_seconds': self.proxy_config.global_config.http_pool.connect_timeout_seconds,
+        }
+        self.oauth_manager = OAuth2Manager(timeout=oauth2_timeout, http_pool_config=http_pool_config)
+        logger.debug(
+            f"[SMTPProxyServer] OAuth2Manager initialized (timeout={oauth2_timeout}s, "
+            f"http_pool: {http_pool_config['total_connections']} total connections)"
+        )
 
         # ✅ Initialize RateLimiter (uses provider defaults, per-account overrides applied at runtime)
         # Default to Gmail's limit (10k messages/hour) as conservative baseline
