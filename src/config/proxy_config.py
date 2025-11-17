@@ -231,9 +231,12 @@ class ProxyConfig:
             if 'global' in data:
                 self.global_config = GlobalConfig.from_dict(data['global'])
 
-            # Load provider configs
+            # Load provider configs (skip documentation fields starting with _)
             if 'providers' in data:
                 for provider_name, provider_data in data['providers'].items():
+                    # Skip documentation fields (e.g., _description, _doc)
+                    if provider_name.startswith('_'):
+                        continue
                     self.providers[provider_name] = ProviderConfig.from_dict(provider_data)
 
             logger.info(
