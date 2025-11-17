@@ -174,10 +174,12 @@ python -m src.main --config accounts.json --port 2525
 ### Command Line Options
 
 ```
---config PATH           Path to accounts.json (default: accounts.json)
+--config PATH           Path to config.json (default: config.json)
+--accounts PATH         Path to accounts.json (default: accounts.json)
 --port PORT             SMTP listening port (default: 2525)
 --host HOST             Bind address (default: 127.0.0.1)
---metrics-port PORT     Prometheus metrics port (default: 9090)
+--admin-port PORT       Admin HTTP API port (default: 9090)
+--admin-host HOST       Admin HTTP API host (default: 127.0.0.1)
 --dry-run               Test mode without relaying messages
 --global-concurrency N  Global concurrency limit (default: 100)
 ```
@@ -209,10 +211,25 @@ curl http://localhost:9090/health
 # Response: {"status": "healthy"}
 ```
 
-### Metrics
+### Admin API
 
 ```bash
-curl http://localhost:9090/metrics | grep auth_attempts
+# List accounts
+curl http://localhost:9090/admin/accounts
+
+# Add account via HTTP API
+curl -X POST http://localhost:9090/admin/accounts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "sales@gmail.com",
+    "provider": "gmail",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "refresh_token": "YOUR_REFRESH_TOKEN",
+    "verify": true
+  }'
+
+# See docs/ADMIN_API.md for complete documentation
 ```
 
 ### SMTP Test
@@ -233,25 +250,60 @@ swaks --server localhost:2525 \
 
 ---
 
-## Monitoring
+## Managing Accounts
 
-### Prometheus Metrics
+### Interactive Tool
 
-Metrics available at `http://localhost:9090/metrics`:
+Add accounts using the interactive CLI tool:
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `smtp_commands_total` | Counter | SMTP commands processed |
-| `auth_attempts_total` | Counter | Authentication attempts by result |
-| `auth_duration_seconds` | Histogram | Authentication duration |
-| `messages_total` | Counter | Messages relayed by result |
-| `messages_duration_seconds` | Histogram | Message relay duration |
-| `token_refresh_total` | Counter | OAuth2 token refreshes |
-| `smtp_connections_active` | Gauge | Active SMTP connections |
-| `concurrent_messages` | Gauge | Concurrent messages per account |
-| `errors_total` | Counter | Errors by type |
+```bash
+# Run interactive tool
+python add_account.py
 
-### Logging
+# The tool will prompt you for:
+# - Email address
+# - Provider (gmail/outlook)
+# - Client ID
+# - Client Secret
+# - Refresh Token
+#
+# It verifies credentials before saving!
+```
+
+### HTTP Admin API
+
+Manage accounts via HTTP while the server is running (port 9090):
+
+**List Accounts:**
+```bash
+curl http://localhost:9090/admin/accounts
+```
+
+**Add Account:**
+```bash
+curl -X POST http://localhost:9090/admin/accounts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "sales@gmail.com",
+    "provider": "gmail",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "refresh_token": "YOUR_REFRESH_TOKEN",
+    "verify": true
+  }'
+```
+
+**Benefits:**
+- ✅ Add accounts without restarting
+- ✅ Automatic hot-reload (zero downtime)
+- ✅ OAuth2 credential verification
+- ✅ API-first design for automation
+
+**Complete API documentation:** See `docs/ADMIN_API.md`
+
+---
+
+## Logging
 
 Logs are written to:
 - **Linux/macOS**: `/var/log/xoauth2/xoauth2_proxy.log`
