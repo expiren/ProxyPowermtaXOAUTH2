@@ -35,7 +35,9 @@
       "server_hostname": "xoauth2-proxy",
       "max_message_size": 52428800,
       "max_recipients": 1000,
-      "max_line_length": 1000
+      "max_line_length": 1000,
+      "use_source_ip_binding": true,
+      "validate_source_ip": true
     },
 
     "logging": {

@@ -86,7 +86,13 @@
       "_max_recipients_doc": "Maximum recipients per message (default: 1000)",
 
       "max_line_length": 1000,
-      "_max_line_length_doc": "Maximum SMTP command line length (default: 1000, RFC 5321 recommends 512)"
+      "_max_line_length_doc": "Maximum SMTP command line length (default: 1000, RFC 5321 recommends 512)",
+
+      "use_source_ip_binding": true,
+      "_use_source_ip_binding_doc": "Enable source IP binding from ip_address field in accounts.json (default: true, requires IPs configured on server)",
+
+      "validate_source_ip": true,
+      "_validate_source_ip_doc": "Validate that source IPs exist on server before use (default: true, recommended for production)"
     },
 
     "logging": {
