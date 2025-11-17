@@ -451,8 +451,7 @@ tail -f xoauth2_proxy.log
 ```
 aiosmtpd>=1.4.4    - Async SMTP server library (legacy, not used in v2.0)
 aiosmtplib>=3.0.0  - Async SMTP client for upstream relay
-aiohttp>=3.8.0     - Async HTTP client for OAuth2 token refresh
-requests>=2.28.0   - Blocking HTTP client for standalone tools (add_account.py)
+aiohttp>=3.8.0     - Async HTTP client for OAuth2, Admin API, and add_account tool
 ```
 
 Install with:

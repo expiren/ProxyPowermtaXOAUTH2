@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Interactive tool to add accounts to accounts.json"""
 
+import asyncio
 import json
 import sys
 import os
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional
-import requests
-from datetime import datetime, UTC
+import aiohttp
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -42,7 +42,7 @@ def get_token_url(provider: str) -> str:
         return ''
 
 
-def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, str]:
+async def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, str]:
     """Verify OAuth2 credentials by attempting token refresh"""
     provider = account_data['provider']
     token_url = get_token_url(provider)
@@ -71,21 +71,28 @@ def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, str]:
             if account_data.get('client_secret'):
                 data['client_secret'] = account_data['client_secret']
 
-        response = requests.post(token_url, data=data, timeout=10)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data=data, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    token_data = await response.json()
+                    access_token = token_data.get('access_token')
+                    if access_token:
+                        print("✓ OAuth2 credentials verified successfully!")
+                        return True, "Credentials verified"
+                    else:
+                        return False, "No access token in response"
+                else:
+                    response_text = await response.text()
+                    try:
+                        error_json = json.loads(response_text)
+                        error_msg = error_json.get('error_description', response_text)
+                    except:
+                        error_msg = response_text
+                    return False, f"Token refresh failed: {error_msg}"
 
-        if response.status_code == 200:
-            token_data = response.json()
-            access_token = token_data.get('access_token')
-            if access_token:
-                print("✓ OAuth2 credentials verified successfully!")
-                return True, "Credentials verified"
-            else:
-                return False, "No access token in response"
-        else:
-            error_msg = response.json().get('error_description', response.text)
-            return False, f"Token refresh failed: {error_msg}"
-
-    except requests.exceptions.RequestException as e:
+    except asyncio.TimeoutError:
+        return False, "Network error: Request timeout"
+    except aiohttp.ClientError as e:
         return False, f"Network error: {str(e)}"
     except Exception as e:
         return False, f"Verification error: {str(e)}"
@@ -190,7 +197,7 @@ def save_accounts(accounts_path: Path, accounts: list) -> bool:
         return False
 
 
-def main():
+async def main():
     """Main entry point"""
     # Get accounts.json path
     if len(sys.argv) > 1:
@@ -210,7 +217,7 @@ def main():
     # Ask if user wants to verify credentials
     verify = input("\nVerify OAuth2 credentials? (y/n) [y]: ").strip().lower()
     if verify != 'n':
-        success, message = verify_oauth_credentials(account)
+        success, message = await verify_oauth_credentials(account)
         if not success:
             print(f"\n✗ Verification failed: {message}")
             proceed = input("\nAdd account anyway? (y/n) [n]: ").strip().lower()
@@ -261,7 +268,7 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\n✗ Cancelled by user.")
         sys.exit(1)
