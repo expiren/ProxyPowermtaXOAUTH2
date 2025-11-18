@@ -22,6 +22,13 @@ def validate_email(email: str) -> bool:
     return bool(re.match(pattern, email))
 
 
+def is_personal_microsoft_account(email: str) -> bool:
+    """Check if email is a personal Microsoft account (not Azure AD/Office365)"""
+    personal_domains = ['hotmail.com', 'outlook.com', 'live.com', 'msn.com']
+    domain = email.split('@')[-1].lower()
+    return domain in personal_domains
+
+
 def get_oauth_endpoint(provider: str) -> str:
     """Get SMTP endpoint based on provider"""
     if provider == 'gmail':
@@ -32,12 +39,17 @@ def get_oauth_endpoint(provider: str) -> str:
         return ''
 
 
-def get_token_url(provider: str) -> str:
-    """Get OAuth2 token URL based on provider"""
+def get_token_url(provider: str, email: str = '') -> str:
+    """Get OAuth2 token URL based on provider and account type"""
     if provider == 'gmail':
         return 'https://oauth2.googleapis.com/token'
     elif provider == 'outlook':
-        return 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+        # Personal Microsoft accounts use different endpoint
+        if email and is_personal_microsoft_account(email):
+            return 'https://login.live.com/oauth20_token.srf'
+        else:
+            # Azure AD / Office365 organizational accounts
+            return 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
     else:
         return ''
 
@@ -45,12 +57,15 @@ def get_token_url(provider: str) -> str:
 async def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, str]:
     """Verify OAuth2 credentials by attempting token refresh"""
     provider = account_data['provider']
-    token_url = get_token_url(provider)
+    email = account_data['email']
+
+    # Get correct token URL based on provider and account type
+    token_url = get_token_url(provider, email)
 
     if not token_url:
         return False, f"Unknown provider: {provider}"
 
-    print(f"\nVerifying OAuth2 credentials for {account_data['email']}...")
+    print(f"\nVerifying OAuth2 credentials for {email}...")
 
     try:
         if provider == 'gmail':
@@ -61,12 +76,26 @@ async def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, 
                 'grant_type': 'refresh_token'
             }
         elif provider == 'outlook':
-            data = {
-                'client_id': account_data['client_id'],
-                'refresh_token': account_data['refresh_token'],
-                'grant_type': 'refresh_token',
-                'scope': 'https://outlook.office365.com/SMTP.Send offline_access'
-            }
+            # Personal Microsoft accounts vs Azure AD/Office365
+            is_personal = is_personal_microsoft_account(email)
+
+            if is_personal:
+                # Personal Microsoft account (hotmail.com, outlook.com, live.com)
+                data = {
+                    'client_id': account_data['client_id'],
+                    'refresh_token': account_data['refresh_token'],
+                    'grant_type': 'refresh_token',
+                    'scope': 'wl.imap wl.smtp wl.offline_access'  # Personal account scopes
+                }
+            else:
+                # Azure AD / Office365 organizational account
+                data = {
+                    'client_id': account_data['client_id'],
+                    'refresh_token': account_data['refresh_token'],
+                    'grant_type': 'refresh_token',
+                    'scope': 'https://outlook.office365.com/SMTP.Send offline_access'
+                }
+
             # Add client_secret only if provided
             if account_data.get('client_secret'):
                 data['client_secret'] = account_data['client_secret']
@@ -122,9 +151,11 @@ def prompt_account_details() -> Optional[Dict[str, Any]]:
     oauth_endpoint = get_oauth_endpoint(provider)
     print(f"SMTP endpoint: {oauth_endpoint} (auto-detected)")
 
-    # Auto-detect oauth_token_url (OAuth2 token endpoint)
-    oauth_token_url = get_token_url(provider)
+    # Auto-detect oauth_token_url (OAuth2 token endpoint) based on account type
+    oauth_token_url = get_token_url(provider, email)
     print(f"OAuth2 token URL: {oauth_token_url} (auto-detected)")
+    if provider == 'outlook' and is_personal_microsoft_account(email):
+        print(f"  → Detected personal Microsoft account (@{email.split('@')[-1]})")
 
     # IP Address (optional for source IP binding)
     ip_address = input("IP Address (optional, press Enter to skip): ").strip()
