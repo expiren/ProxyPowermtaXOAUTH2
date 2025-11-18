@@ -18,10 +18,10 @@ class AccountConfig:
     vmta_name: str
     provider: str  # 'gmail' or 'outlook'
     client_id: str
-    client_secret: str
     refresh_token: str
     oauth_endpoint: str  # SMTP endpoint (e.g., smtp.office365.com:587)
     oauth_token_url: str  # OAuth2 token endpoint (provider-specific)
+    client_secret: str = ""  # Optional for some Outlook OAuth flows
 
     # Concurrency limits (legacy, kept for backward compatibility)
     max_concurrent_messages: int = 10
