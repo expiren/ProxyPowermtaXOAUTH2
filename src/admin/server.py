@@ -119,11 +119,13 @@ class AdminServer:
         try:
             with open(self.accounts_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Handle both array and object formats
+                # Handle both formats: array at root or {"accounts": [...]}
+                # This matches the ConfigLoader logic for consistency
                 if isinstance(data, list):
                     return data
                 elif isinstance(data, dict):
-                    return list(data.values()) if data else []
+                    # Check if it's {"accounts": [...]} format
+                    return data.get('accounts', [])
                 else:
                     return []
         except json.JSONDecodeError:
