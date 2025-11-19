@@ -90,25 +90,16 @@ class AdminServer:
                     'grant_type': 'refresh_token'
                 }
             elif provider == 'outlook':
-                # Personal Microsoft accounts vs Azure AD/Office365
-                is_personal = self._is_personal_microsoft_account(email)
-
-                if is_personal:
-                    # Personal Microsoft account (hotmail.com, outlook.com, live.com)
-                    data = {
-                        'client_id': account_data['client_id'],
-                        'refresh_token': account_data['refresh_token'],
-                        'grant_type': 'refresh_token',
-                        'scope': 'wl.imap wl.smtp wl.offline_access'  # Personal account scopes
-                    }
-                else:
-                    # Azure AD / Office365 organizational account
-                    data = {
-                        'client_id': account_data['client_id'],
-                        'refresh_token': account_data['refresh_token'],
-                        'grant_type': 'refresh_token',
-                        'scope': 'https://outlook.office365.com/SMTP.Send offline_access'
-                    }
+                # Outlook/Microsoft accounts (both personal and organizational)
+                # IMPORTANT: Do NOT include scope parameter during token refresh
+                # The refresh token already has scopes embedded from initial authorization
+                # Requesting different scopes will cause "unauthorized or expired" error
+                data = {
+                    'client_id': account_data['client_id'],
+                    'refresh_token': account_data['refresh_token'],
+                    'grant_type': 'refresh_token',
+                    # NO SCOPE - matches OAuth2Manager behavior
+                }
 
                 # Add client_secret only if provided
                 if account_data.get('client_secret'):
