@@ -116,6 +116,11 @@ class SMTPProxyServer:
 
             # Update account_manager's proxy_config reference
             self.account_manager.proxy_config = self.proxy_config
+
+            # Update admin_server's proxy_config reference (for IP binding settings)
+            self.admin_server.proxy_config = self.proxy_config
+            logger.debug("[SMTPProxyServer] Updated AdminServer proxy_config reference")
+
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
 
