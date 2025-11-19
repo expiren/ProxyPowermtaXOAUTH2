@@ -39,6 +39,7 @@ class AdminServer:
         # Round-robin IP assignment state
         self.available_ips: List[str] = []
         self.ip_assignment_index: int = 0
+        self.ip_assignment_lock = asyncio.Lock()  # Thread-safe IP assignment
         self._initialize_ip_pool()
 
     def _initialize_ip_pool(self):
@@ -54,7 +55,7 @@ class AdminServer:
                 ip for ip in all_ips
                 if ip not in ['127.0.0.1', '::1', 'localhost']
                 and not ip.startswith('127.')
-                and not ip.startswith('::1')
+                and ip != '::1'  # IPv6 loopback (exact match, not prefix)
             ]
 
             if self.available_ips:
@@ -66,9 +67,9 @@ class AdminServer:
             logger.error(f"[AdminServer] Failed to detect server IPs: {e}")
             self.available_ips = []
 
-    def _get_next_ip(self) -> Optional[str]:
+    async def _get_next_ip(self) -> Optional[str]:
         """
-        Get next IP in round-robin fashion
+        Get next IP in round-robin fashion (thread-safe)
 
         Returns:
             IP address or None if no IPs available
@@ -76,11 +77,13 @@ class AdminServer:
         if not self.available_ips:
             return None
 
-        # Get current IP
-        ip = self.available_ips[self.ip_assignment_index]
+        # Thread-safe IP assignment
+        async with self.ip_assignment_lock:
+            # Get current IP
+            ip = self.available_ips[self.ip_assignment_index]
 
-        # Move to next IP (round-robin)
-        self.ip_assignment_index = (self.ip_assignment_index + 1) % len(self.available_ips)
+            # Move to next IP (round-robin)
+            self.ip_assignment_index = (self.ip_assignment_index + 1) % len(self.available_ips)
 
         return ip
 
@@ -300,7 +303,7 @@ class AdminServer:
 
             # Auto-assign IP if not provided and IP binding is enabled
             if not ip_address and self._should_auto_assign_ip():
-                auto_ip = self._get_next_ip()
+                auto_ip = await self._get_next_ip()
                 if auto_ip:
                     ip_address = auto_ip
                     logger.info(f"[AdminServer] Auto-assigned IP {ip_address} to {email} (round-robin)")
