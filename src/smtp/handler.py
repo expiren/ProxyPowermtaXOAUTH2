@@ -281,7 +281,13 @@ class SMTPProxyHandler(asyncio.Protocol):
                 if account.token is None or account.token.is_expired():
                     token_status = 'missing' if account.token is None else 'expired'
                     logger.info(f"[{auth_email}] Token {token_status}, refreshing")
-                    token = await self.oauth_manager.get_or_refresh_token(account, force_refresh=True)
+
+                    # Check if token is just a dummy (empty access_token from __post_init__)
+                    # If so, don't force refresh - let OAuth2Manager check cache first
+                    is_dummy_token = (account.token and not account.token.access_token)
+                    force_refresh = not is_dummy_token
+
+                    token = await self.oauth_manager.get_or_refresh_token(account, force_refresh=force_refresh)
                     if not token:
                         logger.error(f"[{auth_email}] Token refresh failed")
                         self.send_response(454, "Temporary authentication failure")
