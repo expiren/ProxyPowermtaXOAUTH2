@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 from aiohttp import web
 import aiohttp
