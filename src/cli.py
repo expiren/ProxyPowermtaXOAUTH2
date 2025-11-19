@@ -13,19 +13,27 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python xoauth2_proxy.py --config accounts.json
-  python xoauth2_proxy.py --host 0.0.0.0 --port 2525 --config /etc/xoauth2/accounts.json
-  python xoauth2_proxy.py --dry-run --config accounts.json
-  python xoauth2_proxy.py --global-concurrency 1000 --config accounts.json
+  python xoauth2_proxy.py
+  python xoauth2_proxy.py --config /path/to/config.json
+  python xoauth2_proxy.py --host 0.0.0.0 --port 2525
+  python xoauth2_proxy.py --dry-run
+  python xoauth2_proxy.py --global-concurrency 1000
         """
     )
 
-    # Configuration
+    # Configuration files (separated: config.json for settings, accounts.json for credentials)
     parser.add_argument(
         '--config',
         type=str,
+        default='config.json',
+        help='Path to config.json file (global settings, default: config.json)'
+    )
+
+    parser.add_argument(
+        '--accounts',
+        type=str,
         default='accounts.json',
-        help='Path to accounts.json configuration file (default: accounts.json)'
+        help='Path to accounts.json file (account credentials, default: accounts.json)'
     )
 
     # Server settings
@@ -43,11 +51,19 @@ Examples:
         help='Listen port (default: 2525)'
     )
 
+    # Admin HTTP server settings
     parser.add_argument(
-        '--metrics-port',
+        '--admin-host',
+        type=str,
+        default='0.0.0.0',
+        help='Admin HTTP server host (default: 0.0.0.0 for internet access, use 127.0.0.1 for localhost only)'
+    )
+
+    parser.add_argument(
+        '--admin-port',
         type=int,
         default=9090,
-        help='Prometheus metrics port (default: 9090)'
+        help='Admin HTTP server port (default: 9090)'
     )
 
     # Performance tuning
@@ -68,10 +84,11 @@ Examples:
     # Parse arguments
     args = parser.parse_args()
 
-    # Smart config path discovery
+    # Smart config path discovery for both files
     config_path = Settings.get_config_path(args.config)
+    accounts_path = Settings.get_config_path(args.accounts)
 
-    return args, config_path
+    return args, config_path, accounts_path
 
 
 def create_settings(args: argparse.Namespace) -> Settings:
@@ -79,7 +96,8 @@ def create_settings(args: argparse.Namespace) -> Settings:
     return Settings(
         host=args.host,
         port=args.port,
-        metrics_port=args.metrics_port,
+        admin_host=args.admin_host,
+        admin_port=args.admin_port,
         global_concurrency_limit=args.global_concurrency,
         dry_run=args.dry_run,
     )

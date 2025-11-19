@@ -54,9 +54,8 @@ src/
 ├── logging/           # Logging setup
 │   └── setup.py       # Platform-specific log paths, formatters
 │
-├── metrics/           # Prometheus metrics
-│   ├── collector.py   # MetricsCollector - counters, gauges, histograms
-│   └── server.py      # MetricsServer - HTTP server on port 9090
+├── admin/             # Admin HTTP API
+│   └── server.py      # AdminServer - HTTP API for managing accounts (port 9090)
 │
 ├── oauth2/            # OAuth2 token management
 │   ├── manager.py     # OAuth2Manager - token refresh, caching, HTTP pool
@@ -78,8 +77,13 @@ src/
 │   ├── connection_pool.py  # Connection pooling utilities
 │   └── exceptions.py       # Utility exceptions
 │
+├── tools/             # Management tools
+│   └── add_account.py # Interactive account addition tool
+│
 ├── cli.py             # CLI argument parsing
 └── main.py            # Application entry point, signal handlers
+
+add_account.py         # Standalone wrapper for adding accounts
 
 archive/               # Original monolithic implementations
 ├── xoauth2_proxy.py          # Original 1100-line proxy
@@ -125,12 +129,21 @@ archive/               # Original monolithic implementations
    - Hot-reload support (SIGHUP signal, not yet wired)
    - Thread-safe account lookups
 
-7. **src/metrics/server.py** - MetricsServer
-   - HTTP server on port 9090
-   - Exposes Prometheus metrics at /metrics
-   - Health check at /health
+7. **src/admin/server.py** - AdminServer
+   - HTTP API server on port 9090
+   - POST /admin/accounts - Add new accounts
+   - GET /admin/accounts - List all accounts
+   - GET /health - Health check
+   - OAuth2 credential verification
+   - Automatic hot-reload after adding accounts
 
-8. **src/utils/** - Resilience patterns
+8. **src/tools/add_account.py** - Add Account Tool
+   - Interactive CLI tool for adding accounts
+   - Email validation and OAuth2 verification
+   - Supports both Gmail and Outlook
+   - Can be run standalone or as module
+
+9. **src/utils/** - Resilience patterns
    - **CircuitBreaker**: Prevents cascading failures to OAuth2/SMTP providers
    - **Retry**: Exponential backoff with jitter for transient failures
    - **RateLimiter**: Token bucket per-account rate limiting
@@ -207,6 +220,14 @@ python -m src.main --config accounts.json
 ### Working with Accounts
 
 ```bash
+# Add a new account interactively (RECOMMENDED)
+python add_account.py
+# Or: python -m src.tools.add_account
+# Or (if installed): xoauth2-add-account
+
+# Add account to custom file
+python add_account.py /path/to/accounts.json
+
 # Validate accounts.json
 python -c "import json; json.load(open('accounts.json'))"
 
@@ -217,15 +238,47 @@ python archive/import_accounts.py -i data.txt -o accounts.json
 python archive/generate_pmta_config.py accounts.json -o pmta.cfg
 ```
 
+### Managing Accounts via HTTP API
+
+The proxy includes an HTTP Admin API (port 9090) for managing accounts while the server is running:
+
+```bash
+# Add account via HTTP POST (while server is running)
+curl -X POST http://127.0.0.1:9090/admin/accounts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "sales@gmail.com",
+    "provider": "gmail",
+    "client_id": "123456789-abc.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-abc123def456",
+    "refresh_token": "1//0gABC123DEF456...",
+    "verify": true
+  }'
+
+# List all accounts
+curl http://127.0.0.1:9090/admin/accounts
+
+# Customize admin port
+python xoauth2_proxy_v2.py --admin-port 8080
+
+# See docs/ADMIN_API.md for complete API documentation
+```
+
+**Benefits:**
+- Add accounts without restarting the proxy
+- Automatic hot-reload (zero downtime)
+- OAuth2 credential verification
+- API-first design for automation
+
 ### Testing & Monitoring
 
 ```bash
-# Health check
+# Health check (Admin API)
 curl http://127.0.0.1:9090/health
-# Response: {"status": "healthy"}
+# Response: {"status": "healthy", "service": "xoauth2-proxy-admin"}
 
-# Metrics
-curl http://127.0.0.1:9090/metrics | grep auth_attempts
+# List accounts (Admin API)
+curl http://127.0.0.1:9090/admin/accounts
 
 # SMTP test (telnet)
 telnet 127.0.0.1 2525
@@ -265,7 +318,8 @@ tail -f xoauth2_proxy.log
 | `src/oauth2/manager.py` | OAuth2Manager | Token refresh, caching, HTTP pool |
 | `src/accounts/manager.py` | AccountManager | Account loading, caching |
 | `src/config/loader.py` | ConfigLoader | Loads and validates accounts.json |
-| `src/metrics/server.py` | MetricsServer | Prometheus metrics HTTP server |
+| `src/admin/server.py` | AdminServer | HTTP API for managing accounts |
+| `src/tools/add_account.py` | Add account tool | Interactive account addition |
 | `src/utils/circuit_breaker.py` | CircuitBreaker | Prevents cascade failures |
 | `src/utils/retry.py` | Retry logic | Exponential backoff with jitter |
 | `src/utils/rate_limiter.py` | RateLimiter | Token bucket algorithm |
@@ -279,6 +333,8 @@ tail -f xoauth2_proxy.log
 | `README.md` | Project README | Quick start, features |
 | `QUICK_START.md` | Quick reference | 3-step setup guide |
 | `SETUP_ACCOUNTS.md` | Account setup guide | OAuth2 credentials, configuration |
+| `docs/ADMIN_API.md` | Admin API guide | HTTP API documentation, examples |
+| `docs/ADD_ACCOUNT_GUIDE.md` | Add account guide | Interactive tool usage |
 | `docs/DEPLOYMENT_GUIDE.md` | Deployment guide | Production deployment |
 | `docs/TEST_PLAN.md` | Test plan | Comprehensive testing |
 | `docs/OAUTH2_REAL_WORLD.md` | OAuth2 details | Token refresh flow, examples |
@@ -376,9 +432,9 @@ tail -f xoauth2_proxy.log
 - Syntax check: `python -m py_compile src/**/*.py`
 
 ### Integration Testing
-1. Start proxy: `python xoauth2_proxy_v2.py --config accounts.json`
+1. Start proxy: `python xoauth2_proxy_v2.py --accounts accounts.json`
 2. Health check: `curl http://127.0.0.1:9090/health`
-3. Metrics: `curl http://127.0.0.1:9090/metrics | grep token_`
+3. List accounts: `curl http://127.0.0.1:9090/admin/accounts`
 4. Auth test: `swaks --server 127.0.0.1:2525 --auth-user <email> ...`
 
 ### Production Testing (with PowerMTA)
@@ -393,9 +449,9 @@ tail -f xoauth2_proxy.log
 ## Dependencies
 
 ```
-aiosmtpd>=1.4.4         - Async SMTP server library (not used in v2.0, replaced with asyncio.Protocol)
-requests>=2.28.0         - OAuth2 HTTP requests
-prometheus-client>=0.15.0 - Metrics collection
+aiosmtpd>=1.4.4    - Async SMTP server library (legacy, not used in v2.0)
+aiosmtplib>=3.0.0  - Async SMTP client for upstream relay
+aiohttp>=3.8.0     - Async HTTP client for OAuth2, Admin API, and add_account tool
 ```
 
 Install with:

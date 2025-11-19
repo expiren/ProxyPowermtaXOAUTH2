@@ -4,21 +4,20 @@ import asyncio
 import logging
 import base64
 import time
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
-from src.metrics.collector import MetricsCollector
 from src.smtp.connection_pool import SMTPConnectionPool
 from src.smtp.exceptions import (
     SMTPAuthenticationError, SMTPConnectionError,
     SMTPRelayError, InvalidRecipient, SMTPTimeout
 )
 
-logger = logging.getLogger('xoauth2_proxy')
+if TYPE_CHECKING:
+    from src.config.proxy_config import SMTPConfig
 
-# Alias for metrics
-Metrics = MetricsCollector
+logger = logging.getLogger('xoauth2_proxy')
 
 
 class UpstreamRelay:
@@ -28,16 +27,22 @@ class UpstreamRelay:
         self,
         oauth_manager: OAuth2Manager,
         max_connections_per_account: int = 50,
-        max_messages_per_connection: int = 100
+        max_messages_per_connection: int = 100,
+        connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
+        connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
+        rate_limiter = None,  # ✅ Optional RateLimiter for per-account rate limiting
+        smtp_config: Optional['SMTPConfig'] = None  # ✅ SMTP config for IP binding
     ):
         self.oauth_manager = oauth_manager
+        self.rate_limiter = rate_limiter  # ✅ Store rate limiter
 
         # Create SMTP connection pool (fully async, no thread pool needed!)
         self.connection_pool = SMTPConnectionPool(
             max_connections_per_account=max_connections_per_account,
             max_messages_per_connection=max_messages_per_connection,
-            connection_max_age=300,      # 5 minutes
-            connection_idle_timeout=60   # 1 minute
+            connection_max_age=connection_max_age,  # ✅ From config
+            connection_idle_timeout=connection_idle_timeout,  # ✅ From config
+            smtp_config=smtp_config  # ✅ Pass SMTP config for IP binding
         )
 
         # Start cleanup task
@@ -46,7 +51,9 @@ class UpstreamRelay:
         logger.info(
             f"[UpstreamRelay] Initialized with connection pooling "
             f"(max_conn_per_account={max_connections_per_account}, "
-            f"max_msg_per_conn={max_messages_per_connection})"
+            f"max_msg_per_conn={max_messages_per_connection}, "
+            f"max_age={connection_max_age}s, idle_timeout={connection_idle_timeout}s, "
+            f"rate_limiting={'enabled' if rate_limiter else 'disabled'})"
         )
 
     async def initialize(self):
@@ -64,13 +71,18 @@ class UpstreamRelay:
         dry_run: bool = False
     ) -> Tuple[bool, int, str]:
         """
-        Send message via upstream SMTP server using XOAUTH2 (Fully Async)
+        Send message via upstream SMTP server using XOAUTH2 with connection reuse
+
+        NOTE: PowerMTA sends one message per SMTP conversation:
+        - Different messages have different content
+        - Each message has ONE recipient (len(rcpt_tos) == 1)
+        - Connection reuse happens across sequential messages from SAME sender account
 
         Args:
             account: Account configuration
-            message_data: Raw message bytes
+            message_data: Raw message bytes (unique per message)
             mail_from: Sender email
-            rcpt_tos: List of recipients
+            rcpt_tos: List of recipients (typically 1 recipient per message)
             dry_run: If True, test connection but don't send
 
         Returns:
@@ -79,14 +91,33 @@ class UpstreamRelay:
         start_time = time.time()
 
         try:
+            # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)
+            if self.rate_limiter:
+                try:
+                    # Acquire token from rate limiter with per-account settings
+                    # (raises RateLimitExceeded if over limit)
+                    await self.rate_limiter.acquire(account.email, account=account)
+                    logger.debug(f"[{account.email}] Rate limit check passed")
+                except Exception as e:
+                    # Rate limit exceeded - reject with temporary failure
+                    logger.warning(f"[{account.email}] Rate limit exceeded: {e}")
+                    return (False, 451, "4.4.4 Rate limit exceeded, try again later")
+
             # Refresh token if needed
             token = await self.oauth_manager.get_or_refresh_token(account)
             if not token:
                 logger.error(f"[{account.email}] Failed to get OAuth2 token")
                 return (False, 454, "4.7.0 Temporary service unavailable")
 
+            # Validate mail_from doesn't contain control characters that could corrupt XOAUTH2
+            # XOAUTH2 uses \1 (ASCII 0x01) as separator, so we must reject it in mail_from
+            if '\x01' in mail_from or '\x00' in mail_from:
+                logger.error(
+                    f"[{account.email}] Invalid mail_from contains control characters: {repr(mail_from)}"
+                )
+                return (False, 501, "5.5.2 Invalid sender address")
+
             # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
-            # Using \1 literal (octal escape for byte 0x01)
             xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
 
             logger.debug(
@@ -101,27 +132,26 @@ class UpstreamRelay:
 
             logger.info(
                 f"[{account.email}] Relaying to {smtp_host}:{smtp_port} "
-                f"({account.provider.upper()}) - {len(rcpt_tos)} recipients"
+                f"({account.provider.upper()}) - {len(rcpt_tos)} recipient(s)"
             )
 
-            # Acquire connection from pool (async, reuses existing authenticated connections!)
-            connection = await self.connection_pool.acquire(
-                account_email=account.email,
-                smtp_host=smtp_host,
-                smtp_port=smtp_port,
-                xoauth2_string=xoauth2_string
-            )
-
+            # Acquire connection from pool (reuses existing authenticated connections!)
+            # ✅ Pass account object for per-account connection pool settings
+            # ✅ Moved inside try block to ensure semaphore is always released on any exception
+            connection = None  # Initialize to None so exception handlers can check if assigned
             try:
+                connection = await self.connection_pool.acquire(
+                    account_email=account.email,
+                    smtp_host=smtp_host,
+                    smtp_port=smtp_port,
+                    xoauth2_string=xoauth2_string,
+                    account=account  # ✅ Per-account settings (max_connections, max_messages)
+                )
                 # Dry-run mode
                 if dry_run:
                     logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
-                    # Release connection back to pool
                     await self.connection_pool.release(account.email, connection, increment_count=False)
                     return (True, 250, "2.0.0 OK (dry-run)")
-
-                # Send message (fully async!)
-                logger.info(f"[{account.email}] Sending message to {rcpt_tos}...")
 
                 # Convert message_data to string if needed
                 if isinstance(message_data, bytes):
@@ -129,51 +159,67 @@ class UpstreamRelay:
                 else:
                     message_str = message_data
 
-                # Send with aiosmtplib (fully async, no blocking!)
-                errors, response = await connection.sendmail(
-                    mail_from,
-                    rcpt_tos,
-                    message_str
-                )
+                # ✅ USE LOW-LEVEL SMTP COMMANDS FOR CONNECTION REUSE
+                # This keeps connection state clean and ready for next message
+                logger.info(f"[{account.email}] Sending message to {rcpt_tos[0] if rcpt_tos else 'unknown'}...")
 
-                # Release connection back to pool
+                # MAIL FROM
+                code, msg = await connection.mail(mail_from)
+                if code not in (250, 251):
+                    logger.error(f"[{account.email}] MAIL FROM rejected: {code} {msg}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
+                    return (False, code, msg)
+
+                # RCPT TO (for each recipient - typically just one)
+                rejected_recipients = []
+                for rcpt in rcpt_tos:
+                    code, msg = await connection.rcpt(rcpt)
+                    if code not in (250, 251):
+                        logger.warning(f"[{account.email}] RCPT TO {rcpt} rejected: {code} {msg}")
+                        rejected_recipients.append(rcpt)
+
+                # If all recipients rejected, fail
+                if rejected_recipients and len(rejected_recipients) == len(rcpt_tos):
+                    logger.error(f"[{account.email}] All recipients rejected")
+                    await self.connection_pool.remove_and_close(account.email, connection)
+                    return (False, 553, "5.1.3 All recipients rejected")
+
+                # DATA (send message body)
+                code, msg = await connection.data(message_str)
+                if code != 250:
+                    logger.error(f"[{account.email}] DATA rejected: {code} {msg}")
+                    await self.connection_pool.remove_and_close(account.email, connection)
+                    return (False, code, msg)
+
+                # ✅ SUCCESS - Return connection to pool (KEEP ALIVE for reuse)
+                # Connection is now in clean state, ready for next MAIL FROM command
                 await self.connection_pool.release(account.email, connection, increment_count=True)
 
-                # Check for rejected recipients
-                if errors:
-                    logger.warning(f"[{account.email}] Some recipients rejected: {errors}")
-                    rejected_str = ", ".join([f"{addr}" for addr in errors.keys()])
-                    return (False, 553, f"5.1.3 Some recipients rejected: {rejected_str[:50]}")
-
-                # Success
                 duration = time.time() - start_time
-                Metrics.messages_total.labels(result='success').inc()
-                Metrics.messages_duration_seconds.observe(duration)
-
                 logger.info(
-                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipients "
+                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipient(s) "
                     f"({duration:.3f}s)"
                 )
+
+                if rejected_recipients:
+                    rejected_str = ", ".join(rejected_recipients[:3])
+                    return (True, 250, f"2.0.0 OK (some recipients rejected: {rejected_str})")
+
                 return (True, 250, "2.0.0 OK")
 
             except asyncio.TimeoutError:
-                # Release connection on error
-                await self.connection_pool.release(account.email, connection, increment_count=False)
-
-                duration = time.time() - start_time
+                # Timeout - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP timeout")
-                Metrics.messages_total.labels(result='failure').inc()
-                Metrics.messages_duration_seconds.observe(duration)
+                if connection:  # Only release if connection was acquired
+                    await self.connection_pool.remove_and_close(account.email, connection)
+
                 return (False, 450, "4.4.2 Connection timeout")
 
             except Exception as e:
-                # Release connection on error
-                await self.connection_pool.release(account.email, connection, increment_count=False)
-
-                duration = time.time() - start_time
+                # Error - close connection, don't reuse
                 logger.error(f"[{account.email}] SMTP send error: {e}")
-                Metrics.messages_total.labels(result='failure').inc()
-                Metrics.messages_duration_seconds.observe(duration)
+                if connection:  # Only release if connection was acquired
+                    await self.connection_pool.remove_and_close(account.email, connection)
 
                 # Parse error for better response
                 error_str = str(e).lower()
@@ -187,11 +233,7 @@ class UpstreamRelay:
                     return (False, 452, "4.3.0 SMTP error")
 
         except Exception as e:
-            duration = time.time() - start_time
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
-            Metrics.messages_total.labels(result='failure').inc()
-            Metrics.errors_total.labels(error_type='relay').inc()
-            Metrics.messages_duration_seconds.observe(duration)
             return (False, 450, "4.4.2 Internal error")
 
     async def shutdown(self):

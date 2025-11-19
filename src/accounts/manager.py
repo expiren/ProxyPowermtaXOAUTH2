@@ -6,7 +6,6 @@ from typing import Dict, Optional
 from pathlib import Path
 
 from src.accounts.models import AccountConfig
-from src.config.loader import ConfigLoader
 
 logger = logging.getLogger('xoauth2_proxy')
 
@@ -14,8 +13,9 @@ logger = logging.getLogger('xoauth2_proxy')
 class AccountManager:
     """Manages accounts with in-memory caching"""
 
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, proxy_config=None):
         self.config_path = config_path
+        self.proxy_config = proxy_config  # ✅ Store proxy_config
         self.accounts: Dict[str, AccountConfig] = {}  # email -> account
         self.accounts_by_id: Dict[str, AccountConfig] = {}  # account_id -> account
         self.lock = asyncio.Lock()
@@ -25,9 +25,10 @@ class AccountManager:
         self.email_cache: Dict[str, AccountConfig] = {}
 
     async def load(self) -> int:
-        """Load accounts from config file"""
-        from src.config.loader import ConfigLoader
-        accounts = ConfigLoader.load(self.config_path)
+        """Load accounts from config file with proxy config merging"""
+        from src.config.loader import ConfigLoader  # Import here to avoid circular dependency
+        # ✅ Pass proxy_config to ConfigLoader
+        accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
         async with self.lock:
             self.accounts = accounts
@@ -77,20 +78,38 @@ class AccountManager:
 
     async def reload(self) -> int:
         """Reload accounts from config (hot-reload)"""
+        from src.config.loader import ConfigLoader  # Import here to avoid circular dependency
         try:
-            accounts = ConfigLoader.load(self.config_path)
+            # ✅ Pass proxy_config to ConfigLoader
+            accounts = ConfigLoader.load(self.config_path, proxy_config=self.proxy_config)
 
             async with self.lock:
-                # Keep existing tokens for accounts that didn't change
+                # Preserve runtime state from existing accounts
+                # This prevents lock separation and state loss during hot-reload
                 for email, new_account in accounts.items():
                     if email in self.accounts:
                         old_account = self.accounts[email]
+
+                        # Preserve token if refresh_token unchanged
                         if new_account.refresh_token == old_account.refresh_token:
                             new_account.token = old_account.token
 
+                        # ✅ FIX: Preserve lock to prevent lock separation
+                        # In-flight requests hold references to old account with old lock
+                        # New requests get new account - must use SAME lock for concurrency
+                        new_account.lock = old_account.lock
+
+                        # ✅ FIX: Preserve runtime counters
+                        # Prevents state loss and inaccurate metrics after hot-reload
+                        new_account.messages_this_hour = old_account.messages_this_hour
+                        new_account.concurrent_messages = old_account.concurrent_messages
+                        new_account.active_connections = old_account.active_connections
+
+                # Clear cache BEFORE replacing dicts to prevent race condition
+                # This ensures lookups during replacement will use the new dict instead of stale cache
+                self.email_cache.clear()
                 self.accounts = accounts
                 self.accounts_by_id = {acc.account_id: acc for acc in accounts.values()}
-                self.email_cache.clear()
 
             logger.info(f"[AccountManager] Reloaded {len(accounts)} accounts")
             self.reload_event.set()

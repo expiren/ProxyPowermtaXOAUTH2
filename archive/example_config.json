@@ -1,0 +1,151 @@
+{
+  "_comment": "EXAMPLE: XOAUTH2 Proxy v2.0 - Global Configuration Template",
+  "_version": "2.0",
+  "_description": "Copy this to config.json and customize for your environment",
+
+  "global": {
+    "concurrency": {
+      "global_concurrency_limit": 100,
+      "backpressure_queue_size": 1000,
+      "connection_backlog": 100
+    },
+
+    "timeouts": {
+      "oauth2_timeout": 10,
+      "connection_acquire_timeout": 5,
+      "smtp_command_timeout": 300,
+      "smtp_data_timeout": 600
+    },
+
+    "oauth2": {
+      "token_refresh_buffer_seconds": 300,
+      "token_cache_ttl_seconds": 60,
+      "token_default_lifetime_seconds": 3600
+    },
+
+    "http_pool": {
+      "total_connections": 500,
+      "connections_per_host": 100,
+      "dns_cache_ttl_seconds": 300,
+      "connect_timeout_seconds": 5,
+      "max_retries": 3
+    },
+
+    "smtp": {
+      "server_hostname": "xoauth2-proxy",
+      "max_message_size": 52428800,
+      "max_recipients": 1000,
+      "max_line_length": 1000,
+      "use_source_ip_binding": true,
+      "validate_source_ip": true
+    },
+
+    "logging": {
+      "level": "INFO",
+      "format": "%(asctime)s - %(name)s - %(levelname)s - [%(threadName)s] - %(message)s",
+      "log_file_override": null,
+      "console_output": true
+    }
+  },
+
+  "providers": {
+    "gmail": {
+      "oauth_token_url": "https://oauth2.googleapis.com/token",
+      "smtp_endpoint": "smtp.gmail.com:587",
+
+      "connection_pool": {
+        "max_connections_per_account": 40,
+        "max_messages_per_connection": 50,
+        "connection_max_age_seconds": 600,
+        "connection_idle_timeout_seconds": 120,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 10000,
+        "messages_per_minute_per_connection": 25,
+        "burst_size": 50
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    },
+
+    "outlook": {
+      "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "smtp_endpoint": "smtp.office365.com:587",
+
+      "connection_pool": {
+        "max_connections_per_account": 30,
+        "max_messages_per_connection": 40,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 10000,
+        "messages_per_minute_per_connection": 15,
+        "burst_size": 30
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    },
+
+    "default": {
+      "connection_pool": {
+        "max_connections_per_account": 30,
+        "max_messages_per_connection": 50,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60,
+        "connection_acquire_timeout_seconds": 5
+      },
+
+      "rate_limiting": {
+        "enabled": true,
+        "messages_per_hour": 5000,
+        "messages_per_minute_per_connection": 20,
+        "burst_size": 40
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60,
+        "half_open_max_calls": 2
+      }
+    }
+  }
+}

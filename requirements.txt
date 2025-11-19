@@ -2,7 +2,6 @@
 # Python 3.8+ required
 
 # Core async SMTP server (legacy, replaced by asyncio.Protocol)
-aiosmtpd>=1.4.4
 
 # Async SMTP client for upstream relay (NEW - for connection pooling and 50k+ msg/min)
 aiosmtplib>=3.0.0
@@ -10,8 +9,8 @@ aiosmtplib>=3.0.0
 # Async HTTP client for OAuth2 token refresh (PHASE 1: Replaced blocking requests library)
 aiohttp>=3.8.0
 
-# Prometheus metrics and monitoring
-prometheus-client>=0.15.0
+# Network interface enumeration for source IP binding (optional but recommended)
+netifaces>=0.11.0
 
 # Optional: HTTPS/TLS support (included in stdlib but listed for clarity)
 # ssl (built-in)

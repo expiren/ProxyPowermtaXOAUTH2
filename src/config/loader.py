@@ -1,9 +1,10 @@
-"""Configuration loader for accounts.json"""
+"""Configuration loader for accounts.json with proxy config integration"""
 
 import json
 import logging
+import urllib.parse
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from src.accounts.models import AccountConfig
 from src.utils.exceptions import ConfigError, DuplicateAccount
@@ -12,15 +13,16 @@ logger = logging.getLogger('xoauth2_proxy')
 
 
 class ConfigLoader:
-    """Loads and validates accounts configuration"""
+    """Loads and validates accounts configuration with provider config merging"""
 
     @staticmethod
-    def load(config_path: Path) -> Dict[str, AccountConfig]:
+    def load(config_path: Path, proxy_config=None) -> Dict[str, AccountConfig]:
         """
-        Load accounts from JSON file
+        Load accounts from JSON file and merge with provider config
 
         Args:
             config_path: Path to accounts.json
+            proxy_config: ProxyConfig instance (optional, for merging provider defaults)
 
         Returns:
             Dict of email -> AccountConfig
@@ -51,7 +53,42 @@ class ConfigLoader:
 
         for account_data in account_list:
             try:
-                account = AccountConfig(**account_data)
+                # Filter out comments (fields starting with _)
+                filtered_data = {
+                    k: v for k, v in account_data.items()
+                    if not k.startswith('_')
+                }
+
+                # Validate oauth_endpoint format (must be host:port with valid numeric port)
+                oauth_endpoint = filtered_data.get('oauth_endpoint', '')
+                if not oauth_endpoint or ':' not in oauth_endpoint:
+                    raise ConfigError(
+                        f"Invalid oauth_endpoint format (must be host:port): "
+                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
+                # Validate port is numeric and in valid range
+                parts = oauth_endpoint.split(':')
+                if len(parts) != 2:
+                    raise ConfigError(
+                        f"Invalid oauth_endpoint format (must have exactly one colon): "
+                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
+                try:
+                    port = int(parts[1])
+                    if not (1 <= port <= 65535):
+                        raise ConfigError(
+                            f"Port must be between 1 and 65535: "
+                            f"{port} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                        )
+                except ValueError:
+                    raise ConfigError(
+                        f"Port must be numeric: "
+                        f"{parts[1]} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                    )
+
+                account = AccountConfig(**filtered_data)
 
                 # Check for duplicate emails
                 if account.email in accounts:
@@ -61,20 +98,37 @@ class ConfigLoader:
                 if account.account_id in seen_ids:
                     raise DuplicateAccount(f"Duplicate account_id: {account.account_id}")
 
+                # Merge provider defaults with account-specific overrides
+                if proxy_config:
+                    provider_config = proxy_config.get_provider_config(account.provider)
+                    account.apply_provider_config(provider_config)
+                    pool_config = account.get_connection_pool_config()
+                    if pool_config:
+                        logger.debug(
+                            f"[ConfigLoader] Applied {account.provider} config to {account.email} "
+                            f"(max_connections={pool_config.max_connections_per_account}, "
+                            f"max_messages={pool_config.max_messages_per_connection})"
+                        )
+                    else:
+                        logger.warning(f"[ConfigLoader] No connection pool config for {account.email}")
+
+                # Validate account configuration
+                ConfigLoader.validate_account(account)
+
                 accounts[account.email] = account
                 seen_ids.add(account.account_id)
 
                 logger.debug(f"[ConfigLoader] Loaded account: {account.email}")
 
             except TypeError as e:
-                raise ConfigError(f"Missing required field: {e}")
+                raise ConfigError(f"Missing required field in account: {e}")
 
         logger.info(f"[ConfigLoader] Loaded {len(accounts)} accounts from {config_path}")
         return accounts
 
     @staticmethod
     def validate_account(account: AccountConfig) -> bool:
-        """Validate account configuration"""
+        """Validate account configuration with provider-specific checks"""
         if not account.email or '@' not in account.email:
             raise ConfigError(f"Invalid email: {account.email}")
 
@@ -83,5 +137,26 @@ class ConfigLoader:
 
         if not account.client_id or not account.refresh_token:
             raise ConfigError(f"Missing OAuth2 credentials for {account.email}")
+
+        # Validate oauth_token_url format (must be HTTPS URL with hostname)
+        if not account.oauth_token_url or not account.oauth_token_url.startswith('https://'):
+            raise ConfigError(
+                f"Invalid oauth_token_url for {account.email}: "
+                f"must be a valid HTTPS URL (got: {account.oauth_token_url or 'empty'})"
+            )
+
+        # Validate URL has hostname (not just "https://")
+        parsed_url = urllib.parse.urlparse(account.oauth_token_url)
+        if not parsed_url.netloc:
+            raise ConfigError(
+                f"Invalid oauth_token_url for {account.email}: "
+                f"missing hostname (got: {account.oauth_token_url})"
+            )
+
+        # Provider-specific validation
+        if account.is_gmail and (not account.client_secret or not account.client_secret.strip()):
+            raise ConfigError(
+                f"Gmail account {account.email} requires non-empty client_secret for OAuth2 token refresh"
+            )
 
         return True

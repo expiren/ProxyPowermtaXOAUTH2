@@ -26,21 +26,28 @@ class Application:
     async def run(self):
         """Main application loop"""
         try:
-            # Parse CLI arguments
-            args, config_path = parse_arguments()
+            # Parse CLI arguments (returns config_path and accounts_path separately)
+            args, config_path, accounts_path = parse_arguments()
 
-            # Verify config exists
+            # Verify both config files exist
             if not config_path.exists():
                 logger.error(f"Config file not found: {config_path}")
+                sys.exit(1)
+
+            if not accounts_path.exists():
+                logger.error(f"Accounts file not found: {accounts_path}")
                 sys.exit(1)
 
             # Create settings
             settings = create_settings(args)
 
             # Create and start proxy server
-            logger.info(f"Initializing XOAUTH2 Proxy from {config_path}")
+            logger.info(f"Initializing XOAUTH2 Proxy")
+            logger.info(f"  Config: {config_path}")
+            logger.info(f"  Accounts: {accounts_path}")
             self.proxy_server = SMTPProxyServer(
                 config_path=config_path,
+                accounts_path=accounts_path,
                 settings=settings
             )
 
@@ -65,11 +72,23 @@ class Application:
         async def shutdown_handler():
             await self.shutdown()
 
+        async def reload_handler():
+            """Handle SIGHUP - reload full configuration (accounts + provider settings)"""
+            logger.info("Received SIGHUP - reloading configuration...")
+            try:
+                if self.proxy_server:
+                    num_accounts = await self.proxy_server.reload()
+                    logger.info(f"Configuration reloaded successfully ({num_accounts} accounts)")
+                else:
+                    logger.warning("Cannot reload: proxy_server not initialized")
+            except Exception as e:
+                logger.error(f"Error reloading configuration: {e}", exc_info=True)
+
         if platform.system() != "Windows":
             # Unix-like systems
             loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(shutdown_handler()))
             loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(shutdown_handler()))
-            loop.add_signal_handler(signal.SIGHUP, lambda: logger.info("Received SIGHUP - hot reload not yet implemented"))
+            loop.add_signal_handler(signal.SIGHUP, lambda: asyncio.create_task(reload_handler()))
         else:
             # Windows - signal handlers run outside event loop, use call_soon_threadsafe
             def windows_signal_handler(sig, frame):

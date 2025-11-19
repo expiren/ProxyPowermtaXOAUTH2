@@ -7,48 +7,25 @@ import os
 
 @dataclass
 class Settings:
-    """Proxy configuration settings"""
+    """Proxy configuration settings (CLI arguments only)
 
-    # Server settings
+    Note: All other settings (timeouts, pools, retry, circuit breaker, etc.)
+    are configured via ProxyConfig (loaded from config.json), not here.
+    """
+
+    # SMTP Server settings
     host: str = "127.0.0.1"
     port: int = 2525
-    metrics_port: int = 9090
 
-    # Performance tuning (high-concurrency configuration)
+    # Admin HTTP Server settings (0.0.0.0 for internet access)
+    admin_host: str = "0.0.0.0"
+    admin_port: int = 9090
+
+    # Global concurrency
     global_concurrency_limit: int = 100
-    max_concurrent_per_account: int = 10
-    max_messages_per_hour: int = 10000
-    smtp_thread_pool_size: int = 500  # Thread pool for blocking SMTP operations
-    http_pool_connections: int = 500  # HTTP connection pool size for OAuth2
-    http_pool_maxsize: int = 500      # Maximum HTTP pool size
-
-    # Timeouts
-    smtp_timeout: int = 15
-    oauth2_timeout: int = 10
-    connection_timeout: int = 15
-
-    # Connection pooling (legacy settings, kept for compatibility)
-    pool_min_size: int = 5
-    pool_max_size: int = 20
-    pool_idle_timeout: int = 300
-
-    # Retry policy
-    retry_attempts: int = 3
-    retry_backoff_factor: float = 2.0
-    retry_max_delay: int = 30
-
-    # Circuit breaker
-    circuit_breaker_threshold: int = 5
-    circuit_breaker_timeout: int = 60
-
-    # OAuth2
-    token_refresh_buffer: int = 300  # 5 minutes
-    token_cache_ttl: int = 60
 
     # Features
     dry_run: bool = False
-    enable_metrics: bool = True
-    enable_circuit_breaker: bool = True
 
     @classmethod
     def from_env(cls) -> 'Settings':
@@ -56,7 +33,8 @@ class Settings:
         return cls(
             host=os.getenv('XOAUTH2_HOST', '127.0.0.1'),
             port=int(os.getenv('XOAUTH2_PORT', 2525)),
-            metrics_port=int(os.getenv('XOAUTH2_METRICS_PORT', 9090)),
+            admin_host=os.getenv('XOAUTH2_ADMIN_HOST', '0.0.0.0'),
+            admin_port=int(os.getenv('XOAUTH2_ADMIN_PORT', 9090)),
             global_concurrency_limit=int(os.getenv('XOAUTH2_GLOBAL_CONCURRENCY', 100)),
             dry_run=os.getenv('XOAUTH2_DRY_RUN', 'false').lower() == 'true',
         )

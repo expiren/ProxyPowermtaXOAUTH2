@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import json
 import aiohttp
 from typing import Optional, Dict, TYPE_CHECKING
 from datetime import datetime, timedelta, UTC
@@ -22,8 +21,13 @@ logger = logging.getLogger('xoauth2_proxy')
 class OAuth2Manager:
     """Manages OAuth2 token refresh with pooling and caching"""
 
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        timeout: int = 10,
+        http_pool_config: Optional[Dict] = None
+    ):
         self.timeout = timeout
+        self.http_pool_config = http_pool_config or {}
         self.token_cache: Dict[str, TokenCache] = {}
         # REMOVED: global lock (caused 10-20% throughput loss!)
         # Now using per-email locks for token cache access
@@ -41,8 +45,15 @@ class OAuth2Manager:
         }
 
     async def initialize(self):
-        """Initialize HTTP connection pool"""
-        await http_pool.initialize()
+        """Initialize HTTP connection pool with configuration"""
+        # Pass config from global.http_pool settings
+        await http_pool.initialize(
+            timeout=self.timeout,
+            total_connections=self.http_pool_config.get('total_connections', 500),
+            connections_per_host=self.http_pool_config.get('connections_per_host', 100),
+            dns_cache_ttl=self.http_pool_config.get('dns_cache_ttl_seconds', 300),
+            connect_timeout=self.http_pool_config.get('connect_timeout_seconds', 5)
+        )
         logger.info("[OAuth2Manager] Initialized")
 
     async def get_or_refresh_token(
@@ -110,15 +121,26 @@ class OAuth2Manager:
 
         try:
             # Use circuit breaker per provider to prevent cascading failures
+            # ✅ Get per-account circuit breaker config (or provider defaults)
+            cb_config = account.get_circuit_breaker_config() if account else None
             breaker = await self.circuit_breaker_manager.get_or_create(
-                f"oauth2_{account.provider}"
+                f"oauth2_{account.provider}",
+                failure_threshold=cb_config.failure_threshold if cb_config else 5,
+                recovery_timeout=cb_config.recovery_timeout_seconds if cb_config else 60
             )
 
             # Circuit breaker wraps retry logic:
             # 1. Circuit breaker prevents calls if provider is known to be down
             # 2. Retry handles transient failures (network hiccups)
             # 3. If retry fails, circuit breaker tracks the failure
-            retry_config = RetryConfig(max_attempts=2)
+            # ✅ Use per-account retry config (or provider defaults)
+            retry_cfg = account.get_retry_config() if account else None
+            retry_config = RetryConfig(
+                max_attempts=retry_cfg.max_attempts if retry_cfg else 2,
+                backoff_factor=retry_cfg.backoff_factor if retry_cfg else 2.0,
+                max_delay=retry_cfg.max_delay_seconds if retry_cfg else 30,
+                jitter=retry_cfg.jitter_enabled if retry_cfg else True
+            )
 
             # Wrap retry with circuit breaker
             token = await breaker.call(
@@ -224,4 +246,6 @@ class OAuth2Manager:
         # No lock needed - called during shutdown only
         self.token_cache.clear()
         self.cache_locks.clear()
-        logger.info("[OAuth2Manager] Cleaned up")
+        # Close HTTP connection pool to prevent connection leaks
+        await http_pool.close()
+        logger.info("[OAuth2Manager] Cleaned up (including HTTP pool)")

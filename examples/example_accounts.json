@@ -1,0 +1,58 @@
+[
+  {
+    "account_id": "gmail_account_001",
+    "email": "sender001@gmail.com",
+    "ip_address": "192.168.1.101",
+    "vmta_name": "vmta_gmail_01",
+    "provider": "gmail",
+    "client_id": "YOUR_GMAIL_CLIENT_ID.apps.googleusercontent.com",
+    "client_secret": "YOUR_GMAIL_CLIENT_SECRET_XXXXX",
+    "refresh_token": "YOUR_GMAIL_REFRESH_TOKEN_XXXXX",
+    "oauth_endpoint": "smtp.gmail.com:587",
+    "oauth_token_url": "https://oauth2.googleapis.com/token",
+    "max_concurrent_messages": 10,
+    "max_messages_per_hour": 10000
+  },
+  {
+    "account_id": "gmail_account_002",
+    "email": "sender002@gmail.com",
+    "ip_address": "192.168.1.102",
+    "vmta_name": "vmta_gmail_02",
+    "provider": "gmail",
+    "client_id": "YOUR_GMAIL_CLIENT_ID_2.apps.googleusercontent.com",
+    "client_secret": "YOUR_GMAIL_CLIENT_SECRET_2_XXXXX",
+    "refresh_token": "YOUR_GMAIL_REFRESH_TOKEN_2_XXXXX",
+    "oauth_endpoint": "smtp.gmail.com:587",
+    "oauth_token_url": "https://oauth2.googleapis.com/token",
+    "max_concurrent_messages": 10,
+    "max_messages_per_hour": 10000
+  },
+  {
+    "account_id": "outlook_account_001",
+    "email": "sender001@outlook.com",
+    "ip_address": "192.168.1.201",
+    "vmta_name": "vmta_outlook_01",
+    "provider": "outlook",
+    "client_id": "YOUR_OUTLOOK_CLIENT_ID_XXXXX",
+    "client_secret": "YOUR_OUTLOOK_CLIENT_SECRET_XXXXX",
+    "refresh_token": "YOUR_OUTLOOK_REFRESH_TOKEN_XXXXX",
+    "oauth_endpoint": "smtp.office365.com:587",
+    "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    "max_concurrent_messages": 10,
+    "max_messages_per_hour": 10000
+  },
+  {
+    "account_id": "outlook_account_002",
+    "email": "sender002@outlook.com",
+    "ip_address": "192.168.1.202",
+    "vmta_name": "vmta_outlook_02",
+    "provider": "outlook",
+    "client_id": "YOUR_OUTLOOK_CLIENT_ID_2_XXXXX",
+    "client_secret": "YOUR_OUTLOOK_CLIENT_SECRET_2_XXXXX",
+    "refresh_token": "YOUR_OUTLOOK_REFRESH_TOKEN_2_XXXXX",
+    "oauth_endpoint": "smtp.office365.com:587",
+    "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    "max_concurrent_messages": 10,
+    "max_messages_per_hour": 10000
+  }
+]
