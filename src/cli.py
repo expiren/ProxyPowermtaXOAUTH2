@@ -1,12 +1,13 @@
 """Command-line interface argument parser"""
 
 import argparse
+from argparse import Namespace
 from pathlib import Path
 
 from src.config.settings import Settings
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> tuple[Namespace, Path, Path]:
     """Parse command-line arguments"""
     parser = argparse.ArgumentParser(
         description='Production XOAUTH2 SMTP Proxy for PowerMTA',
