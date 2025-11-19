@@ -169,6 +169,7 @@ class AdminServer:
         Returns:
             Tuple of (success: bool, message: str, token_data: Optional[dict])
         """
+        global data
         provider = account_data['provider']
         email = account_data['email']
 
