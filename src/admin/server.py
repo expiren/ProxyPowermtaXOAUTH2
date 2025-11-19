@@ -693,9 +693,12 @@ class AdminServer:
         try:
             # Clean up the runner (this handles stopping the site AND cleaning up)
             # Do NOT manually stop the site first - runner.cleanup() handles it
-            if self.runner:
+            # Check that runner is not None AND has a valid app reference
+            if self.runner and hasattr(self.runner, '_app') and self.runner._app is not None:
                 await self.runner.cleanup()
                 logger.debug("[AdminServer] Runner and site cleaned up")
+            elif self.runner:
+                logger.debug("[AdminServer] Runner exists but not properly initialized, skipping cleanup")
         except Exception as e:
             logger.warning(f"[AdminServer] Error cleaning up runner: {e}")
 
