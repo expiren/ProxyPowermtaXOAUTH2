@@ -84,7 +84,8 @@ class SMTPProxyServer:
             account_manager=self.account_manager,
             oauth_manager=self.oauth_manager,
             host=settings.admin_host,
-            port=settings.admin_port
+            port=settings.admin_port,
+            proxy_config=self.proxy_config  # Pass proxy config for IP auto-assignment
         )
 
         self.server = None

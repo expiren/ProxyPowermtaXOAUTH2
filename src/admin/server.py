@@ -23,16 +23,78 @@ class AdminServer:
         account_manager,
         oauth_manager: OAuth2Manager,
         host: str = '127.0.0.1',
-        port: int = 9090
+        port: int = 9090,
+        proxy_config = None
     ):
         self.accounts_path = accounts_path
         self.account_manager = account_manager
         self.oauth_manager = oauth_manager
         self.host = host
         self.port = port
+        self.proxy_config = proxy_config
         self.app = None
         self.runner = None
         self.site = None
+
+        # Round-robin IP assignment state
+        self.available_ips: List[str] = []
+        self.ip_assignment_index: int = 0
+        self._initialize_ip_pool()
+
+    def _initialize_ip_pool(self):
+        """Initialize available IP pool for round-robin assignment"""
+        try:
+            from src.utils.network import get_server_ips
+
+            # Get all IPs on server
+            all_ips = get_server_ips()
+
+            # Filter out localhost/loopback IPs
+            self.available_ips = [
+                ip for ip in all_ips
+                if ip not in ['127.0.0.1', '::1', 'localhost']
+                and not ip.startswith('127.')
+                and not ip.startswith('::1')
+            ]
+
+            if self.available_ips:
+                logger.info(f"[AdminServer] Detected {len(self.available_ips)} IPs for round-robin assignment: {', '.join(self.available_ips)}")
+            else:
+                logger.warning("[AdminServer] No non-localhost IPs detected. Auto IP assignment disabled.")
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Failed to detect server IPs: {e}")
+            self.available_ips = []
+
+    def _get_next_ip(self) -> Optional[str]:
+        """
+        Get next IP in round-robin fashion
+
+        Returns:
+            IP address or None if no IPs available
+        """
+        if not self.available_ips:
+            return None
+
+        # Get current IP
+        ip = self.available_ips[self.ip_assignment_index]
+
+        # Move to next IP (round-robin)
+        self.ip_assignment_index = (self.ip_assignment_index + 1) % len(self.available_ips)
+
+        return ip
+
+    def _should_auto_assign_ip(self) -> bool:
+        """Check if auto IP assignment should be enabled"""
+        # Check if we have proxy_config and IP binding is enabled
+        if not self.proxy_config:
+            return False
+
+        try:
+            smtp_config = self.proxy_config.global_config.smtp
+            return smtp_config.use_source_ip_binding and len(self.available_ips) > 0
+        except AttributeError:
+            return False
 
     def _validate_email(self, email: str) -> bool:
         """Validate email format"""
@@ -233,8 +295,15 @@ class AdminServer:
             account_id = data.get('account_id', f"{provider}_{email.replace('@', '_').replace('.', '_')}")
             vmta_name = data.get('vmta_name', f"vmta-{provider}-{email.split('@')[0]}")
 
-            # Get IP address (optional)
+            # Get IP address (optional, with auto-assignment)
             ip_address = data.get('ip_address', '').strip()
+
+            # Auto-assign IP if not provided and IP binding is enabled
+            if not ip_address and self._should_auto_assign_ip():
+                auto_ip = self._get_next_ip()
+                if auto_ip:
+                    ip_address = auto_ip
+                    logger.info(f"[AdminServer] Auto-assigned IP {ip_address} to {email} (round-robin)")
 
             # Build account object
             account = {
