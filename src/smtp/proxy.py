@@ -125,6 +125,17 @@ class SMTPProxyServer:
             self.admin_server._initialize_ip_pool()
             logger.debug("[SMTPProxyServer] Re-initialized AdminServer IP pool")
 
+            # Update UpstreamRelay connection pool's smtp_config and refresh IP cache
+            # This ensures IP validation cache reflects new use_ipv6 setting
+            if hasattr(self.upstream_relay, 'connection_pool'):
+                # Update smtp_config reference
+                smtp_config = self.proxy_config.global_config.smtp if self.proxy_config else None
+                self.upstream_relay.connection_pool.smtp_config = smtp_config
+
+                # Refresh IP cache with new settings
+                self.upstream_relay.connection_pool.refresh_ip_cache()
+                logger.debug("[SMTPProxyServer] Refreshed connection pool IP cache")
+
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
 

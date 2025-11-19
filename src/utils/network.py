@@ -9,6 +9,41 @@ from typing import List, Optional
 logger = logging.getLogger('xoauth2_proxy')
 
 
+# ===================================================================
+# Reserved IP Range Constants (RFC Compliance)
+# ===================================================================
+# Define reserved ranges once at module level for performance
+# Prevents recreating network objects on every is_reserved_ip() call
+
+# IPv4 reserved ranges (14 ranges)
+IPV4_RESERVED_RANGES = [
+    ipaddress.ip_network('0.0.0.0/8'),          # Current network
+    ipaddress.ip_network('10.0.0.0/8'),         # Private
+    ipaddress.ip_network('100.64.0.0/10'),      # Shared address space (CGN)
+    ipaddress.ip_network('127.0.0.0/8'),        # Loopback
+    ipaddress.ip_network('169.254.0.0/16'),     # Link-local
+    ipaddress.ip_network('172.16.0.0/12'),      # Private
+    ipaddress.ip_network('192.0.2.0/24'),       # Documentation
+    ipaddress.ip_network('192.168.0.0/16'),     # Private
+    ipaddress.ip_network('198.18.0.0/15'),      # Benchmark testing
+    ipaddress.ip_network('198.51.100.0/24'),    # Documentation
+    ipaddress.ip_network('203.0.113.0/24'),     # Documentation
+    ipaddress.ip_network('224.0.0.0/4'),        # Multicast
+    ipaddress.ip_network('240.0.0.0/4'),        # Reserved
+    ipaddress.ip_network('255.255.255.255/32'), # Broadcast
+]
+
+# IPv6 reserved ranges (6 ranges)
+IPV6_RESERVED_RANGES = [
+    ipaddress.ip_network('::/128'),         # Unspecified
+    ipaddress.ip_network('::1/128'),        # Loopback
+    ipaddress.ip_network('fe80::/10'),      # Link-local
+    ipaddress.ip_network('fc00::/7'),       # Unique local (private)
+    ipaddress.ip_network('ff00::/8'),       # Multicast
+    ipaddress.ip_network('2001:db8::/32'),  # Documentation
+]
+
+
 def get_server_ips() -> List[str]:
     """
     Get all IP addresses configured on the server
@@ -192,31 +227,19 @@ def is_reserved_ip(ip: str) -> bool:
     Check if an IP address is in a reserved/private range and should NOT be used
     for outbound internet SMTP connections.
 
+    Uses module-level constants IPV4_RESERVED_RANGES and IPV6_RESERVED_RANGES
+    for performance (prevents recreating network objects on every call).
+
     Reserved ranges filtered:
 
-    IPv4:
-    - 0.0.0.0/8         - Current network
-    - 10.0.0.0/8        - Private network
-    - 100.64.0.0/10     - Shared address space (CGN)
-    - 127.0.0.0/8       - Loopback
-    - 169.254.0.0/16    - Link-local
-    - 172.16.0.0/12     - Private network
-    - 192.0.2.0/24      - Documentation
-    - 192.168.0.0/16    - Private network
-    - 198.18.0.0/15     - Benchmark testing
-    - 198.51.100.0/24   - Documentation
-    - 203.0.113.0/24    - Documentation
-    - 224.0.0.0/4       - Multicast
-    - 240.0.0.0/4       - Reserved
-    - 255.255.255.255/32 - Broadcast
+    IPv4 (14 ranges):
+    - 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16
+    - 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15
+    - 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4
+    - 255.255.255.255/32
 
-    IPv6:
-    - ::/128            - Unspecified
-    - ::1/128           - Loopback
-    - fe80::/10         - Link-local
-    - fc00::/7          - Unique local address (private)
-    - ff00::/8          - Multicast
-    - 2001:db8::/32     - Documentation
+    IPv6 (6 ranges):
+    - ::/128, ::1/128, fe80::/10, fc00::/7, ff00::/8, 2001:db8::/32
 
     Args:
         ip: IP address string to check
@@ -227,42 +250,16 @@ def is_reserved_ip(ip: str) -> bool:
     try:
         ip_obj = ipaddress.ip_address(ip)
 
-        # IPv4 reserved ranges
+        # Check IPv4 reserved ranges (use module-level constants)
         if isinstance(ip_obj, ipaddress.IPv4Address):
-            reserved_ranges = [
-                ipaddress.ip_network('0.0.0.0/8'),          # Current network
-                ipaddress.ip_network('10.0.0.0/8'),         # Private
-                ipaddress.ip_network('100.64.0.0/10'),      # Shared address space
-                ipaddress.ip_network('127.0.0.0/8'),        # Loopback
-                ipaddress.ip_network('169.254.0.0/16'),     # Link-local
-                ipaddress.ip_network('172.16.0.0/12'),      # Private
-                ipaddress.ip_network('192.0.2.0/24'),       # Documentation
-                ipaddress.ip_network('192.168.0.0/16'),     # Private
-                ipaddress.ip_network('198.18.0.0/15'),      # Benchmark testing
-                ipaddress.ip_network('198.51.100.0/24'),    # Documentation
-                ipaddress.ip_network('203.0.113.0/24'),     # Documentation
-                ipaddress.ip_network('224.0.0.0/4'),        # Multicast
-                ipaddress.ip_network('240.0.0.0/4'),        # Reserved
-                ipaddress.ip_network('255.255.255.255/32'), # Broadcast
-            ]
-
-            for network in reserved_ranges:
+            for network in IPV4_RESERVED_RANGES:
                 if ip_obj in network:
                     logger.debug(f"[NetUtils] IP {ip} is in reserved range {network}")
                     return True
 
-        # IPv6 reserved ranges
+        # Check IPv6 reserved ranges (use module-level constants)
         elif isinstance(ip_obj, ipaddress.IPv6Address):
-            reserved_ranges = [
-                ipaddress.ip_network('::/128'),         # Unspecified
-                ipaddress.ip_network('::1/128'),        # Loopback
-                ipaddress.ip_network('fe80::/10'),      # Link-local
-                ipaddress.ip_network('fc00::/7'),       # Unique local (private)
-                ipaddress.ip_network('ff00::/8'),       # Multicast
-                ipaddress.ip_network('2001:db8::/32'),  # Documentation
-            ]
-
-            for network in reserved_ranges:
+            for network in IPV6_RESERVED_RANGES:
                 if ip_obj in network:
                     logger.debug(f"[NetUtils] IP {ip} is in reserved range {network}")
                     return True
