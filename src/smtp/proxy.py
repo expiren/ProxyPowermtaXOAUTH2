@@ -121,6 +121,10 @@ class SMTPProxyServer:
             self.admin_server.proxy_config = self.proxy_config
             logger.debug("[SMTPProxyServer] Updated AdminServer proxy_config reference")
 
+            # Re-initialize IP pool with new settings (e.g., use_ipv6 changed)
+            self.admin_server._initialize_ip_pool()
+            logger.debug("[SMTPProxyServer] Re-initialized AdminServer IP pool")
+
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
 

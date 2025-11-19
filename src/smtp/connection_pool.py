@@ -60,11 +60,30 @@ class SMTPConnectionPool:
         if smtp_config and smtp_config.use_source_ip_binding and smtp_config.validate_source_ip:
             # Import here to avoid circular dependency
             from src.utils.network import get_server_ips
-            self.server_ips_cache = get_server_ips()
+            all_ips = get_server_ips()
+
+            # Filter out link-local IPv6 and respect use_ipv6 setting
+            filtered_ips = []
+            use_ipv6 = smtp_config.use_ipv6 if hasattr(smtp_config, 'use_ipv6') else False
+
+            for ip in all_ips:
+                # Skip link-local IPv6 (fe80::/10) - always invalid for internet SMTP
+                if ':' in ip and ip.startswith('fe80:'):
+                    logger.debug(f"[SMTPConnectionPool] Skipping link-local IPv6 from validation cache: {ip}")
+                    continue
+
+                # Skip IPv6 if disabled
+                if ':' in ip and not use_ipv6:
+                    logger.debug(f"[SMTPConnectionPool] Skipping IPv6 from validation cache (use_ipv6=false): {ip}")
+                    continue
+
+                filtered_ips.append(ip)
+
+            self.server_ips_cache = filtered_ips
             self.ips_cached_at = datetime.now(UTC)
             logger.info(
                 f"[SMTPConnectionPool] Source IP validation enabled. "
-                f"Found {len(self.server_ips_cache)} IPs on server"
+                f"Found {len(self.server_ips_cache)} usable IPs on server (IPv6: {'enabled' if use_ipv6 else 'disabled'})"
             )
 
         # Pool: account_email -> deque of PooledConnection (O(1) operations!)
@@ -243,8 +262,22 @@ class SMTPConnectionPool:
                         source_ip = account.ip_address.strip()
 
                         if source_ip:
+                            # ✅ SAFETY: Reject link-local IPv6 (fe80::/10) - not routable on internet
+                            if ':' in source_ip and source_ip.startswith('fe80:'):
+                                logger.error(
+                                    f"[Pool] Link-local IPv6 {source_ip} cannot be used for internet SMTP for {account_email}. "
+                                    f"Proceeding without IP binding."
+                                )
+                                source_ip = None
+                            # ✅ SAFETY: Reject IPv6 if disabled in config
+                            elif ':' in source_ip and not (self.smtp_config.use_ipv6 if hasattr(self.smtp_config, 'use_ipv6') else False):
+                                logger.warning(
+                                    f"[Pool] IPv6 {source_ip} disabled in config for {account_email}. "
+                                    f"Proceeding without IP binding."
+                                )
+                                source_ip = None
                             # ✅ Validate IP if validation is enabled
-                            if self.smtp_config.validate_source_ip:
+                            elif self.smtp_config.validate_source_ip:
                                 from src.utils.network import is_ip_available_on_server
 
                                 if not is_ip_available_on_server(source_ip, self.server_ips_cache):
