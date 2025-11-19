@@ -109,20 +109,13 @@ class UpstreamRelay:
                 logger.error(f"[{account.email}] Failed to get OAuth2 token")
                 return (False, 454, "4.7.0 Temporary service unavailable")
 
-            # Validate mail_from doesn't contain control characters that could corrupt XOAUTH2
-            # XOAUTH2 uses \1 (ASCII 0x01) as separator, so we must reject it in mail_from
-            if '\x01' in mail_from or '\x00' in mail_from:
-                logger.error(
-                    f"[{account.email}] Invalid mail_from contains control characters: {repr(mail_from)}"
-                )
-                return (False, 501, "5.5.2 Invalid sender address")
-
             # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
-            xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
+            # ✅ MUST use account.email (OAuth2 credential owner), NOT mail_from (sender address)
+            xoauth2_string = f"user={account.email}\1auth=Bearer {token.access_token}\1\1"
 
             logger.debug(
                 f"[{account.email}] XOAUTH2 string prepared: "
-                f"user={mail_from}, token_length={len(token.access_token)}, "
+                f"user={account.email}, token_length={len(token.access_token)}, "
                 f"expires_in={token.expires_in_seconds()}s"
             )
 
