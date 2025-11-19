@@ -3,9 +3,9 @@
 import asyncio
 import base64
 import logging
-from typing import Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from collections import deque
 import aiosmtplib
 

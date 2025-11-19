@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Any
 import aiohttp
 from aiohttp import ClientTimeout, TCPConnector
 
@@ -100,7 +100,7 @@ class HTTPSessionPool:
             raise RuntimeError("HTTP session not initialized")
         return self.session
 
-    async def post(self, url: str, data: dict, timeout: Optional[int] = None) -> dict:
+    async def post(self, url: str, data: dict, timeout: Optional[int] = None) -> Any | None:
         """
         Make POST request with automatic retry (fully async)
 

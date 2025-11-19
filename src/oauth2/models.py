@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
-from typing import Optional
 
 
 @dataclass
