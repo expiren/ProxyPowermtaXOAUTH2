@@ -68,8 +68,13 @@ class AdminServer:
         else:
             return ''
 
-    async def _verify_oauth_credentials(self, account_data: Dict[str, Any]) -> tuple[bool, str]:
-        """Verify OAuth2 credentials by attempting token refresh"""
+    async def _verify_oauth_credentials(self, account_data: Dict[str, Any]) -> tuple[bool, str, Optional[dict]]:
+        """
+        Verify OAuth2 credentials by attempting token refresh
+
+        Returns:
+            Tuple of (success: bool, message: str, token_data: Optional[dict])
+        """
         provider = account_data['provider']
         email = account_data['email']
 
@@ -77,7 +82,7 @@ class AdminServer:
         token_url = self._get_token_url(provider, email)
 
         if not token_url:
-            return False, f"Unknown provider: {provider}"
+            return False, f"Unknown provider: {provider}", None
 
         logger.info(f"[AdminServer] Verifying OAuth2 credentials for {email}...")
 
@@ -113,9 +118,9 @@ class AdminServer:
                         access_token = token_data.get('access_token')
                         if access_token:
                             logger.info(f"[AdminServer] OAuth2 credentials verified for {account_data['email']}")
-                            return True, "Credentials verified"
+                            return True, "Credentials verified", token_data
                         else:
-                            return False, "No access token in response"
+                            return False, "No access token in response", None
                     else:
                         error_text = await response.text()
                         try:
@@ -123,12 +128,12 @@ class AdminServer:
                             error_msg = error_json.get('error_description', error_text)
                         except:
                             error_msg = error_text
-                        return False, f"Token refresh failed: {error_msg}"
+                        return False, f"Token refresh failed: {error_msg}", None
 
         except asyncio.TimeoutError:
-            return False, "Request timeout"
+            return False, "Request timeout", None
         except Exception as e:
-            return False, f"Verification error: {str(e)}"
+            return False, f"Verification error: {str(e)}", None
 
     def _load_accounts(self) -> list:
         """Load existing accounts from JSON file"""
@@ -252,12 +257,16 @@ class AdminServer:
             verify = data.get('verify', True)  # Default to True
             if verify:
                 logger.info(f"[AdminServer] Verifying credentials for {email}...")
-                success, message = await self._verify_oauth_credentials(account)
+                success, message, token_data = await self._verify_oauth_credentials(account)
                 if not success:
                     return web.json_response(
                         {'success': False, 'error': f'OAuth2 verification failed: {message}'},
                         status=400
                     )
+
+                # Cache the verification token for immediate reuse
+                if token_data:
+                    await self.oauth_manager.cache_verification_token(email, token_data)
 
             # Load existing accounts
             accounts = self._load_accounts()
@@ -487,11 +496,15 @@ class AdminServer:
             invalid_accounts = []
 
             for account in accounts:
-                success, message = await self._verify_oauth_credentials(account)
+                success, message, token_data = await self._verify_oauth_credentials(account)
 
                 if success:
                     valid_accounts.append(account)
                     logger.info(f"[AdminServer] ✓ {account['email']} - Valid")
+
+                    # Cache the token for immediate reuse
+                    if token_data:
+                        await self.oauth_manager.cache_verification_token(account['email'], token_data)
                 else:
                     invalid_accounts.append(account['email'])
                     logger.warning(f"[AdminServer] ✗ {account['email']} - Invalid: {message}")

@@ -115,6 +115,37 @@ class OAuth2Manager:
             self.token_cache[email] = TokenCache(token=token)
             logger.debug(f"[OAuth2Manager] Cached token for {email}")
 
+    async def cache_verification_token(self, email: str, token_data: dict):
+        """
+        Cache a token obtained during verification (e.g., from AdminServer)
+
+        Args:
+            email: Account email
+            token_data: Token response dict with 'access_token', 'expires_in', etc.
+        """
+        try:
+            access_token = token_data.get('access_token')
+            if not access_token:
+                logger.warning(f"[OAuth2Manager] Cannot cache verification token for {email}: no access_token")
+                return
+
+            expires_in = token_data.get('expires_in', 3600)
+            expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
+
+            token = OAuthToken(
+                access_token=access_token,
+                expires_at=expires_at,
+                refresh_token=token_data.get('refresh_token', ''),
+                scope=token_data.get('scope', ''),
+                token_type=token_data.get('token_type', 'Bearer')
+            )
+
+            await self._cache_token(email, token)
+            logger.info(f"[OAuth2Manager] Cached verification token for {email} (expires in {expires_in}s)")
+
+        except Exception as e:
+            logger.error(f"[OAuth2Manager] Error caching verification token for {email}: {e}")
+
     async def _refresh_token_internal(self, account: 'AccountConfig') -> Optional[OAuthToken]:
         """Refresh OAuth2 token with retry and circuit breaker"""
         self.metrics['refresh_attempts'] += 1
