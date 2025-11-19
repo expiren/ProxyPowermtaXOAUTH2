@@ -50,18 +50,47 @@ class AdminServer:
             # Get all IPs on server
             all_ips = get_server_ips()
 
-            # Filter out localhost/loopback IPs
-            self.available_ips = [
-                ip for ip in all_ips
-                if ip not in ['127.0.0.1', '::1', 'localhost']
-                and not ip.startswith('127.')
-                and ip != '::1'  # IPv6 loopback (exact match, not prefix)
-            ]
+            # Get IPv6 setting from config (default: False)
+            use_ipv6 = False
+            if self.proxy_config:
+                try:
+                    use_ipv6 = self.proxy_config.global_config.smtp.use_ipv6
+                except AttributeError:
+                    pass
+
+            # Filter IPs
+            filtered_ips = []
+            for ip in all_ips:
+                # Skip localhost/loopback
+                if ip in ['127.0.0.1', '::1', 'localhost']:
+                    continue
+                if ip.startswith('127.'):
+                    continue
+                if ip == '::1':  # IPv6 loopback
+                    continue
+
+                # Check if IPv6
+                if ':' in ip:
+                    # Skip link-local IPv6 (fe80::/10) - reserved for local network only
+                    if ip.startswith('fe80:'):
+                        logger.debug(f"[AdminServer] Skipping link-local IPv6: {ip}")
+                        continue
+
+                    # Skip all IPv6 if use_ipv6 = false
+                    if not use_ipv6:
+                        logger.debug(f"[AdminServer] Skipping IPv6 (use_ipv6=false): {ip}")
+                        continue
+
+                # IP passed all filters
+                filtered_ips.append(ip)
+
+            self.available_ips = filtered_ips
 
             if self.available_ips:
                 logger.info(f"[AdminServer] Detected {len(self.available_ips)} IPs for round-robin assignment: {', '.join(self.available_ips)}")
+                logger.info(f"[AdminServer] IPv6 usage: {'enabled' if use_ipv6 else 'disabled'}")
             else:
-                logger.warning("[AdminServer] No non-localhost IPs detected. Auto IP assignment disabled.")
+                logger.warning("[AdminServer] No usable IPs detected. Auto IP assignment disabled.")
 
         except Exception as e:
             logger.error(f"[AdminServer] Failed to detect server IPs: {e}")

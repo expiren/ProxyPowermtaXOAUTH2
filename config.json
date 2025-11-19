@@ -92,7 +92,10 @@
       "_use_source_ip_binding_doc": "Enable source IP binding for outbound SMTP connections (default: true, allows using multiple server IPs)",
 
       "validate_source_ip": true,
-      "_validate_source_ip_doc": "Validate that IP addresses exist on server before using (default: true, prevents config errors)"
+      "_validate_source_ip_doc": "Validate that IP addresses exist on server before using (default: true, prevents config errors)",
+
+      "use_ipv6": false,
+      "_use_ipv6_doc": "Use IPv6 addresses for sending (default: false, most providers work better with IPv4)"
     },
 
     "logging": {
