@@ -76,6 +76,8 @@ class OAuth2Manager:
             cached = await self._get_cached_token(account.email)
             if cached:
                 self.metrics['cache_hits'] += 1
+                # Update account.token with cached token so future checks see valid token
+                account.token = cached.token
                 return cached.token
 
         self.metrics['cache_misses'] += 1

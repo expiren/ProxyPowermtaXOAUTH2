@@ -277,14 +277,22 @@ class SMTPProxyHandler(asyncio.Protocol):
 
             # Check and refresh token if needed (consolidated under account lock)
             async with account.lock:
-                # Defensive check: handle None token or expired token
-                if account.token is None or account.token.is_expired():
-                    token_status = 'missing' if account.token is None else 'expired'
-                    logger.info(f"[{auth_email}] Token {token_status}, refreshing")
+                # Check if token is just a dummy (empty access_token from __post_init__)
+                is_dummy_token = (account.token and not account.token.access_token)
 
-                    # Check if token is just a dummy (empty access_token from __post_init__)
-                    # If so, don't force refresh - let OAuth2Manager check cache first
-                    is_dummy_token = (account.token and not account.token.access_token)
+                # Defensive check: handle None token or expired token
+                # Skip expiry check for dummy tokens (they have expires_at=now(), always appear expired)
+                needs_refresh = account.token is None or (not is_dummy_token and account.token.is_expired())
+
+                if needs_refresh or is_dummy_token:
+                    if is_dummy_token:
+                        logger.debug(f"[{auth_email}] Initial token fetch (checking cache first)")
+                    else:
+                        token_status = 'missing' if account.token is None else 'expired'
+                        logger.info(f"[{auth_email}] Token {token_status}, refreshing")
+
+                    # For dummy tokens, don't force refresh - let OAuth2Manager check cache first
+                    # For real expired tokens, force refresh
                     force_refresh = not is_dummy_token
 
                     token = await self.oauth_manager.get_or_refresh_token(account, force_refresh=force_refresh)
