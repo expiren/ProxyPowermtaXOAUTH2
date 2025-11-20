@@ -237,15 +237,13 @@ class OAuth2Manager:
                 f"(expires in {expires_in}s)"
             )
 
-            # Update account if refresh token changed
+            # Note: Microsoft may return a new refresh_token in the response, but we ignore it
+            # The original refresh_token from accounts.json remains valid and should not be changed
             if refresh_token != account.refresh_token:
-                old_short = account.refresh_token[:20] + "..."
-                new_short = refresh_token[:20] + "..."
-                logger.info(
-                    f"[OAuth2Manager] Refresh token updated for {account.email} "
-                    f"(was {old_short}, now {new_short})"
+                logger.debug(
+                    f"[OAuth2Manager] Microsoft returned different refresh token for {account.email}, "
+                    f"but keeping original from accounts.json (OAuth2 best practice)"
                 )
-                account.refresh_token = refresh_token
 
             return token
 
