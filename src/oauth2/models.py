@@ -33,8 +33,16 @@ class TokenCache:
     token: OAuthToken
     cached_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
-    def is_valid(self, max_age_seconds: int = 60) -> bool:
-        """Check if cached token is still valid"""
+    def is_valid(self, max_age_seconds: int = 3300) -> bool:
+        """
+        Check if cached token is still valid.
+
+        Default max_age is 3300s (55 minutes) which is less than typical token lifetime (3600s)
+        but more than the 300s buffer used in is_expired(). This ensures:
+        - Cached tokens are reused for nearly their full lifetime
+        - Cache expires slightly before token expiry check would trigger refresh
+        - Verification tokens are reused even hours later
+        """
         age = (datetime.now(UTC) - self.cached_at).total_seconds()
         return age < max_age_seconds and not self.token.is_expired(buffer_seconds=300)
 
