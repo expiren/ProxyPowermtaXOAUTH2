@@ -26,7 +26,8 @@ class AdminServer:
         port: int = 9090,
         proxy_config = None
     ):
-        self.accounts_path = accounts_path
+        # Ensure accounts_path is absolute (resolve relative paths)
+        self.accounts_path = Path(accounts_path).resolve()
         self.account_manager = account_manager
         self.oauth_manager = oauth_manager
         self.host = host
@@ -234,16 +235,24 @@ class AdminServer:
     def _save_accounts(self, accounts: list) -> bool:
         """Save accounts to JSON file"""
         try:
-            # Create parent directory if it doesn't exist
-            self.accounts_path.parent.mkdir(parents=True, exist_ok=True)
+            # Ensure parent directory exists (handles both relative and absolute paths)
+            parent_dir = self.accounts_path.parent
+            if not parent_dir.exists():
+                parent_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"[AdminServer] Created directory: {parent_dir}")
 
             # Save with pretty formatting
             with open(self.accounts_path, 'w', encoding='utf-8') as f:
                 json.dump(accounts, f, indent=2, ensure_ascii=False)
 
+            logger.debug(f"[AdminServer] Saved {len(accounts)} accounts to {self.accounts_path}")
             return True
         except Exception as e:
-            logger.error(f"[AdminServer] Error saving {self.accounts_path}: {e}")
+            logger.error(
+                f"[AdminServer] Error saving {self.accounts_path}: {e}\n"
+                f"  Absolute path: {self.accounts_path.absolute()}\n"
+                f"  Parent dir: {self.accounts_path.parent} (exists: {self.accounts_path.parent.exists()})"
+            )
             return False
 
     async def handle_health(self, request: web.Request) -> web.Response:
