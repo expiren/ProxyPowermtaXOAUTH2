@@ -84,7 +84,8 @@ class SMTPProxyServer:
             account_manager=self.account_manager,
             oauth_manager=self.oauth_manager,
             host=settings.admin_host,
-            port=settings.admin_port
+            port=settings.admin_port,
+            proxy_config=self.proxy_config  # Pass proxy config for IP auto-assignment
         )
 
         self.server = None
@@ -115,6 +116,26 @@ class SMTPProxyServer:
 
             # Update account_manager's proxy_config reference
             self.account_manager.proxy_config = self.proxy_config
+
+            # Update admin_server's proxy_config reference (for IP binding settings)
+            self.admin_server.proxy_config = self.proxy_config
+            logger.debug("[SMTPProxyServer] Updated AdminServer proxy_config reference")
+
+            # Re-initialize IP pool with new settings (e.g., use_ipv6 changed)
+            self.admin_server._initialize_ip_pool()
+            logger.debug("[SMTPProxyServer] Re-initialized AdminServer IP pool")
+
+            # Update UpstreamRelay connection pool's smtp_config and refresh IP cache
+            # This ensures IP validation cache reflects new use_ipv6 setting
+            if hasattr(self.upstream_relay, 'connection_pool'):
+                # Update smtp_config reference
+                smtp_config = self.proxy_config.global_config.smtp if self.proxy_config else None
+                self.upstream_relay.connection_pool.smtp_config = smtp_config
+
+                # Refresh IP cache with new settings
+                self.upstream_relay.connection_pool.refresh_ip_cache()
+                logger.debug("[SMTPProxyServer] Refreshed connection pool IP cache")
+
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
 

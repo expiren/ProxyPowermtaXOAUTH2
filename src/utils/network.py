@@ -1,11 +1,47 @@
 """Network utilities for IP validation and network interface checking"""
 
+import ipaddress
 import logging
 import socket
 import subprocess
 from typing import List, Optional
 
 logger = logging.getLogger('xoauth2_proxy')
+
+
+# ===================================================================
+# Reserved IP Range Constants (RFC Compliance)
+# ===================================================================
+# Define reserved ranges once at module level for performance
+# Prevents recreating network objects on every is_reserved_ip() call
+
+# IPv4 reserved ranges (14 ranges)
+IPV4_RESERVED_RANGES = [
+    ipaddress.ip_network('0.0.0.0/8'),          # Current network
+    ipaddress.ip_network('10.0.0.0/8'),         # Private
+    ipaddress.ip_network('100.64.0.0/10'),      # Shared address space (CGN)
+    ipaddress.ip_network('127.0.0.0/8'),        # Loopback
+    ipaddress.ip_network('169.254.0.0/16'),     # Link-local
+    ipaddress.ip_network('172.16.0.0/12'),      # Private
+    ipaddress.ip_network('192.0.2.0/24'),       # Documentation
+    ipaddress.ip_network('192.168.0.0/16'),     # Private
+    ipaddress.ip_network('198.18.0.0/15'),      # Benchmark testing
+    ipaddress.ip_network('198.51.100.0/24'),    # Documentation
+    ipaddress.ip_network('203.0.113.0/24'),     # Documentation
+    ipaddress.ip_network('224.0.0.0/4'),        # Multicast
+    ipaddress.ip_network('240.0.0.0/4'),        # Reserved
+    ipaddress.ip_network('255.255.255.255/32'), # Broadcast
+]
+
+# IPv6 reserved ranges (6 ranges)
+IPV6_RESERVED_RANGES = [
+    ipaddress.ip_network('::/128'),         # Unspecified
+    ipaddress.ip_network('::1/128'),        # Loopback
+    ipaddress.ip_network('fe80::/10'),      # Link-local
+    ipaddress.ip_network('fc00::/7'),       # Unique local (private)
+    ipaddress.ip_network('ff00::/8'),       # Multicast
+    ipaddress.ip_network('2001:db8::/32'),  # Documentation
+]
 
 
 def get_server_ips() -> List[str]:
@@ -184,3 +220,84 @@ def test_source_ip_binding(ip: str, test_host: str = "8.8.8.8", test_port: int =
     except OSError as e:
         logger.error(f"[NetUtils] Failed to bind to {ip}: {e}")
         return False
+
+
+def is_reserved_ip(ip: str) -> bool:
+    """
+    Check if an IP address is in a reserved/private range and should NOT be used
+    for outbound internet SMTP connections.
+
+    Uses module-level constants IPV4_RESERVED_RANGES and IPV6_RESERVED_RANGES
+    for performance (prevents recreating network objects on every call).
+
+    Reserved ranges filtered:
+
+    IPv4 (14 ranges):
+    - 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16
+    - 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15
+    - 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4
+    - 255.255.255.255/32
+
+    IPv6 (6 ranges):
+    - ::/128, ::1/128, fe80::/10, fc00::/7, ff00::/8, 2001:db8::/32
+
+    Args:
+        ip: IP address string to check
+
+    Returns:
+        True if IP is reserved/private and should be skipped, False if public
+    """
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+
+        # Check IPv4 reserved ranges (use module-level constants)
+        if isinstance(ip_obj, ipaddress.IPv4Address):
+            for network in IPV4_RESERVED_RANGES:
+                if ip_obj in network:
+                    logger.debug(f"[NetUtils] IP {ip} is in reserved range {network}")
+                    return True
+
+        # Check IPv6 reserved ranges (use module-level constants)
+        elif isinstance(ip_obj, ipaddress.IPv6Address):
+            for network in IPV6_RESERVED_RANGES:
+                if ip_obj in network:
+                    logger.debug(f"[NetUtils] IP {ip} is in reserved range {network}")
+                    return True
+
+        # If we get here, IP is public and usable
+        return False
+
+    except ValueError as e:
+        # Invalid IP format
+        logger.warning(f"[NetUtils] Invalid IP address format: {ip} - {e}")
+        return True  # Treat invalid IPs as "reserved" (skip them)
+
+
+def get_public_server_ips(use_ipv6: bool = False) -> List[str]:
+    """
+    Get all PUBLIC (non-reserved) IP addresses configured on the server.
+    Filters out private, loopback, link-local, and other reserved ranges.
+
+    Args:
+        use_ipv6: Include IPv6 addresses (default: False)
+
+    Returns:
+        List of public IP addresses suitable for outbound SMTP
+    """
+    all_ips = get_server_ips()
+    public_ips = []
+
+    for ip in all_ips:
+        # Skip reserved IPs
+        if is_reserved_ip(ip):
+            continue
+
+        # Skip IPv6 if disabled
+        if ':' in ip and not use_ipv6:
+            logger.debug(f"[NetUtils] Skipping IPv6 (use_ipv6=false): {ip}")
+            continue
+
+        public_ips.append(ip)
+
+    logger.info(f"[NetUtils] Found {len(public_ips)} public IP(s) out of {len(all_ips)} total")
+    return public_ips

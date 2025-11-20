@@ -4,7 +4,6 @@
 import asyncio
 import json
 import sys
-import os
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -56,6 +55,7 @@ def get_token_url(provider: str, email: str = '') -> str:
 
 async def verify_oauth_credentials(account_data: Dict[str, Any]) -> tuple[bool, str]:
     """Verify OAuth2 credentials by attempting token refresh"""
+    global data
     provider = account_data['provider']
     email = account_data['email']
 

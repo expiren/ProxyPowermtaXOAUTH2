@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 from aiohttp import web
 import aiohttp
@@ -23,16 +23,87 @@ class AdminServer:
         account_manager,
         oauth_manager: OAuth2Manager,
         host: str = '127.0.0.1',
-        port: int = 9090
+        port: int = 9090,
+        proxy_config = None
     ):
         self.accounts_path = accounts_path
         self.account_manager = account_manager
         self.oauth_manager = oauth_manager
         self.host = host
         self.port = port
+        self.proxy_config = proxy_config
         self.app = None
         self.runner = None
         self.site = None
+
+        # Round-robin IP assignment state
+        self.available_ips: List[str] = []
+        self.ip_assignment_index: int = 0
+        self.ip_assignment_lock = asyncio.Lock()  # Thread-safe IP assignment
+        self._initialize_ip_pool()
+
+    def _initialize_ip_pool(self):
+        """
+        Initialize available IP pool for round-robin assignment.
+        Filters out all reserved/private IPs using comprehensive RFC filtering.
+        """
+        try:
+            from src.utils.network import get_public_server_ips
+
+            # Get IPv6 setting from config (default: False)
+            use_ipv6 = False
+            if self.proxy_config:
+                try:
+                    use_ipv6 = self.proxy_config.global_config.smtp.use_ipv6
+                except AttributeError:
+                    pass
+
+            # Get public IPs (automatically filters out all reserved ranges)
+            public_ips = get_public_server_ips(use_ipv6=use_ipv6)
+
+            self.available_ips = public_ips
+
+            if self.available_ips:
+                logger.info(f"[AdminServer] Detected {len(self.available_ips)} public IP(s) for round-robin assignment: {', '.join(self.available_ips)}")
+                logger.info(f"[AdminServer] IPv6 usage: {'enabled' if use_ipv6 else 'disabled'}")
+            else:
+                logger.warning("[AdminServer] No usable public IPs detected. Auto IP assignment disabled.")
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Failed to detect server IPs: {e}")
+            self.available_ips = []
+
+    async def _get_next_ip(self) -> Optional[str]:
+        """
+        Get next IP in round-robin fashion (thread-safe)
+
+        Returns:
+            IP address or None if no IPs available
+        """
+        if not self.available_ips:
+            return None
+
+        # Thread-safe IP assignment
+        async with self.ip_assignment_lock:
+            # Get current IP
+            ip = self.available_ips[self.ip_assignment_index]
+
+            # Move to next IP (round-robin)
+            self.ip_assignment_index = (self.ip_assignment_index + 1) % len(self.available_ips)
+
+        return ip
+
+    def _should_auto_assign_ip(self) -> bool:
+        """Check if auto IP assignment should be enabled"""
+        # Check if we have proxy_config and IP binding is enabled
+        if not self.proxy_config:
+            return False
+
+        try:
+            smtp_config = self.proxy_config.global_config.smtp
+            return smtp_config.use_source_ip_binding and len(self.available_ips) > 0
+        except AttributeError:
+            return False
 
     def _validate_email(self, email: str) -> bool:
         """Validate email format"""
@@ -68,8 +139,14 @@ class AdminServer:
         else:
             return ''
 
-    async def _verify_oauth_credentials(self, account_data: Dict[str, Any]) -> tuple[bool, str]:
-        """Verify OAuth2 credentials by attempting token refresh"""
+    async def _verify_oauth_credentials(self, account_data: Dict[str, Any]) -> tuple[bool, str, Optional[dict]]:
+        """
+        Verify OAuth2 credentials by attempting token refresh
+
+        Returns:
+            Tuple of (success: bool, message: str, token_data: Optional[dict])
+        """
+        global data
         provider = account_data['provider']
         email = account_data['email']
 
@@ -77,7 +154,7 @@ class AdminServer:
         token_url = self._get_token_url(provider, email)
 
         if not token_url:
-            return False, f"Unknown provider: {provider}"
+            return False, f"Unknown provider: {provider}", None
 
         logger.info(f"[AdminServer] Verifying OAuth2 credentials for {email}...")
 
@@ -90,25 +167,16 @@ class AdminServer:
                     'grant_type': 'refresh_token'
                 }
             elif provider == 'outlook':
-                # Personal Microsoft accounts vs Azure AD/Office365
-                is_personal = self._is_personal_microsoft_account(email)
-
-                if is_personal:
-                    # Personal Microsoft account (hotmail.com, outlook.com, live.com)
-                    data = {
-                        'client_id': account_data['client_id'],
-                        'refresh_token': account_data['refresh_token'],
-                        'grant_type': 'refresh_token',
-                        'scope': 'wl.imap wl.smtp wl.offline_access'  # Personal account scopes
-                    }
-                else:
-                    # Azure AD / Office365 organizational account
-                    data = {
-                        'client_id': account_data['client_id'],
-                        'refresh_token': account_data['refresh_token'],
-                        'grant_type': 'refresh_token',
-                        'scope': 'https://outlook.office365.com/SMTP.Send offline_access'
-                    }
+                # Outlook/Microsoft accounts (both personal and organizational)
+                # IMPORTANT: Do NOT include scope parameter during token refresh
+                # The refresh token already has scopes embedded from initial authorization
+                # Requesting different scopes will cause "unauthorized or expired" error
+                data = {
+                    'client_id': account_data['client_id'],
+                    'refresh_token': account_data['refresh_token'],
+                    'grant_type': 'refresh_token',
+                    # NO SCOPE - matches OAuth2Manager behavior
+                }
 
                 # Add client_secret only if provided
                 if account_data.get('client_secret'):
@@ -122,9 +190,9 @@ class AdminServer:
                         access_token = token_data.get('access_token')
                         if access_token:
                             logger.info(f"[AdminServer] OAuth2 credentials verified for {account_data['email']}")
-                            return True, "Credentials verified"
+                            return True, "Credentials verified", token_data
                         else:
-                            return False, "No access token in response"
+                            return False, "No access token in response", None
                     else:
                         error_text = await response.text()
                         try:
@@ -132,12 +200,12 @@ class AdminServer:
                             error_msg = error_json.get('error_description', error_text)
                         except:
                             error_msg = error_text
-                        return False, f"Token refresh failed: {error_msg}"
+                        return False, f"Token refresh failed: {error_msg}", None
 
         except asyncio.TimeoutError:
-            return False, "Request timeout"
+            return False, "Request timeout", None
         except Exception as e:
-            return False, f"Verification error: {str(e)}"
+            return False, f"Verification error: {str(e)}", None
 
     def _load_accounts(self) -> list:
         """Load existing accounts from JSON file"""
@@ -237,8 +305,15 @@ class AdminServer:
             account_id = data.get('account_id', f"{provider}_{email.replace('@', '_').replace('.', '_')}")
             vmta_name = data.get('vmta_name', f"vmta-{provider}-{email.split('@')[0]}")
 
-            # Get IP address (optional)
+            # Get IP address (optional, with auto-assignment)
             ip_address = data.get('ip_address', '').strip()
+
+            # Auto-assign IP if not provided and IP binding is enabled
+            if not ip_address and self._should_auto_assign_ip():
+                auto_ip = await self._get_next_ip()
+                if auto_ip:
+                    ip_address = auto_ip
+                    logger.info(f"[AdminServer] Auto-assigned IP {ip_address} to {email} (round-robin)")
 
             # Build account object
             account = {
@@ -261,12 +336,16 @@ class AdminServer:
             verify = data.get('verify', True)  # Default to True
             if verify:
                 logger.info(f"[AdminServer] Verifying credentials for {email}...")
-                success, message = await self._verify_oauth_credentials(account)
+                success, message, token_data = await self._verify_oauth_credentials(account)
                 if not success:
                     return web.json_response(
                         {'success': False, 'error': f'OAuth2 verification failed: {message}'},
                         status=400
                     )
+
+                # Cache the verification token for immediate reuse
+                if token_data:
+                    await self.oauth_manager.cache_verification_token(email, token_data)
 
             # Load existing accounts
             accounts = self._load_accounts()
@@ -496,11 +575,15 @@ class AdminServer:
             invalid_accounts = []
 
             for account in accounts:
-                success, message = await self._verify_oauth_credentials(account)
+                success, message, token_data = await self._verify_oauth_credentials(account)
 
                 if success:
                     valid_accounts.append(account)
                     logger.info(f"[AdminServer] ✓ {account['email']} - Valid")
+
+                    # Cache the token for immediate reuse
+                    if token_data:
+                        await self.oauth_manager.cache_verification_token(account['email'], token_data)
                 else:
                     invalid_accounts.append(account['email'])
                     logger.warning(f"[AdminServer] ✗ {account['email']} - Invalid: {message}")
@@ -586,19 +669,20 @@ class AdminServer:
         logger.info("[AdminServer] Shutting down admin server...")
 
         try:
-            # Stop the site first if it exists
-            if self.site:
-                await self.site.stop()
-                logger.debug("[AdminServer] Site stopped")
-        except Exception as e:
-            logger.warning(f"[AdminServer] Error stopping site: {e}")
-
-        try:
-            # Clean up the runner
-            if self.runner:
+            # Clean up the runner (this handles stopping the site AND cleaning up)
+            # Do NOT manually stop the site first - runner.cleanup() handles it
+            # Check that runner is not None AND has a valid app reference
+            if self.runner and hasattr(self.runner, '_app') and self.runner._app is not None:
                 await self.runner.cleanup()
-                logger.debug("[AdminServer] Runner cleaned up")
+                logger.debug("[AdminServer] Runner and site cleaned up")
+            elif self.runner:
+                logger.debug("[AdminServer] Runner exists but not properly initialized, skipping cleanup")
         except Exception as e:
             logger.warning(f"[AdminServer] Error cleaning up runner: {e}")
+
+        # Reset references
+        self.runner = None
+        self.site = None
+        self.app = None
 
         logger.info("[AdminServer] Admin server stopped")

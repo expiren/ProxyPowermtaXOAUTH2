@@ -2,17 +2,13 @@
 
 import asyncio
 import logging
-import base64
 import time
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from src.accounts.models import AccountConfig
 from src.oauth2.manager import OAuth2Manager
 from src.smtp.connection_pool import SMTPConnectionPool
-from src.smtp.exceptions import (
-    SMTPAuthenticationError, SMTPConnectionError,
-    SMTPRelayError, InvalidRecipient, SMTPTimeout
-)
+
 
 if TYPE_CHECKING:
     from src.config.proxy_config import SMTPConfig

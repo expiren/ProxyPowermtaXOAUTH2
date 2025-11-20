@@ -155,6 +155,7 @@ class SMTPConfig:
     max_line_length: int = 1000
     use_source_ip_binding: bool = True
     validate_source_ip: bool = True
+    use_ipv6: bool = False  # Disable IPv6 by default (most users want IPv4 only)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SMTPConfig':
@@ -166,6 +167,7 @@ class SMTPConfig:
             max_line_length=data.get('max_line_length', 1000),
             use_source_ip_binding=data.get('use_source_ip_binding', True),
             validate_source_ip=data.get('validate_source_ip', True),
+            use_ipv6=data.get('use_ipv6', False),
         )
 
 

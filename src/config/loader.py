@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 from src.accounts.models import AccountConfig
 from src.utils.exceptions import ConfigError, DuplicateAccount
