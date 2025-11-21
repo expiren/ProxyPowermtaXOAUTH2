@@ -510,7 +510,7 @@ class SMTPConnectionPool:
         try:
             while True:
                 try:
-                    await asyncio.sleep(30)  # Run every 30 seconds
+                    await asyncio.sleep(10)  # Run every 10 seconds (HIGH-VOLUME: faster cleanup)
 
                     # Get snapshot of accounts (no lock needed for list() on dict.keys())
                     accounts = list(self.pools.keys())
