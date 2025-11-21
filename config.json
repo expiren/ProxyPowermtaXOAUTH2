@@ -47,8 +47,8 @@
       "token_refresh_buffer_seconds": 300,
       "_token_refresh_buffer_seconds_doc": "Refresh tokens this many seconds before expiry (default: 300 = 5 minutes, prevents expiry during use)",
 
-      "token_cache_ttl_seconds": 60,
-      "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 60, reduces API calls)",
+      "token_cache_ttl_seconds": 3300,
+      "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 3300 = 55 min, matches token lifetime with 5-min buffer)",
 
       "token_default_lifetime_seconds": 3600,
       "_token_default_lifetime_seconds_doc": "Default token lifetime if provider doesn't specify (default: 3600 = 1 hour)"
