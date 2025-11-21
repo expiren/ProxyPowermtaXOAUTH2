@@ -450,8 +450,12 @@ class SMTPConnectionPool:
         try:
             await pooled.connection.quit()
             self.stats['connections_closed'] += 1
+        except (OSError, ConnectionError, asyncio.TimeoutError):
+            # ✅ FIX PERF #4: Only ignore expected network errors during close
+            pass  # Silently ignore network errors during connection close
         except Exception as e:
-            pass  # Ignore errors during close
+            # ✅ Log unexpected errors (could indicate bugs)
+            logger.warning(f"Unexpected error closing connection for {pooled.account_email}: {e}")
         finally:
             # ✅ Defensive release semaphore if this connection was still holding one
             # This should only happen if there's a bug (non-busy connections should have semaphore=None)

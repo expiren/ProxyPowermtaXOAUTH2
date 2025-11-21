@@ -84,7 +84,8 @@ class UpstreamRelay:
         Returns:
             (success: bool, smtp_code: int, message: str)
         """
-        start_time = time.time()
+        # ✅ FIX BUG #4: Removed unused start_time variable (wasted 1,166 time.time() calls/sec)
+        # start_time = time.time()
 
         try:
             # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)

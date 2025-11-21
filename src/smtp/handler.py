@@ -89,22 +89,35 @@ class SMTPProxyHandler(asyncio.Protocol):
         if self.processing_task and not self.processing_task.done():
             self.processing_task.cancel()
 
-        # ✅ FIX: Decrement concurrent_messages if processing was in progress
-        # This prevents counter leak when connection lost during DATA processing
-        if self.current_account:
-            # Check if we were processing a message (state is DATA_RECEIVING and counter was incremented)
-            if self.state == 'DATA_RECEIVING' and self.current_account.concurrent_messages > 0:
-                self.current_account.concurrent_messages -= 1
-                logger.debug(
-                    f"[{self.current_account.email}] Connection lost during message processing, "
-                    f"decremented concurrent_messages to {self.current_account.concurrent_messages}"
-                )
+        # ✅ FIX BUG #3: Clear line queue to prevent memory leak
+        while not self.line_queue.empty():
+            try:
+                self.line_queue.get_nowait()
+                self.line_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
 
-        # Update metrics synchronously (no task needed - runs in event loop)
+        # ✅ FIX BUG #1: Use async task to decrement counter with proper locking
+        # connection_lost() is NOT async, so we must create a task for async operations
         if self.current_account:
-            # Decrement active connections count (unified tracking in account object)
+            if self.state == 'DATA_RECEIVING':
+                # Schedule async cleanup (runs after connection_lost returns)
+                asyncio.create_task(self._cleanup_on_disconnect())
+
+            # Decrement active connections count (synchronous, no lock needed)
             if self.current_account.active_connections > 0:
                 self.current_account.active_connections -= 1
+
+    async def _cleanup_on_disconnect(self):
+        """Async helper to cleanup counter with proper locking (BUG #1 FIX)"""
+        if self.current_account:
+            async with self.current_account.lock:
+                if self.current_account.concurrent_messages > 0:
+                    self.current_account.concurrent_messages -= 1
+                    logger.debug(
+                        f"[{self.current_account.email}] Connection lost during message processing, "
+                        f"decremented concurrent_messages to {self.current_account.concurrent_messages}"
+                    )
 
     def data_received(self, data):
         """Data received from client"""
@@ -391,8 +404,11 @@ class SMTPProxyHandler(asyncio.Protocol):
 
     async def handle_message_data(self, data: bytes):
         """Handle message data (called when <CRLF>.<CRLF> received)"""
-        try:
+        success = False
+        smtp_code = 450
+        smtp_message = "4.4.2 Temporary service failure"
 
+        try:
             # ✅ Acquire global semaphore for backpressure (limits concurrent message processing)
             if self.global_semaphore:
                 async with self.global_semaphore:
@@ -414,34 +430,30 @@ class SMTPProxyHandler(asyncio.Protocol):
                     dry_run=self.dry_run
                 )
 
-            # Update concurrency
-            async with self.current_account.lock:
-                self.current_account.concurrent_messages -= 1
+        except Exception as e:
+            logger.error(f"[{self.current_account.email}] Error processing message: {e}")
+            success = False
+            smtp_code = 450
+            smtp_message = "4.4.2 Temporary service failure"
+
+        finally:
+            # ✅ FIX BUG #2: ALWAYS decrement counter in finally block
+            # This prevents counter leak if exception occurs before normal decrement
+            try:
+                async with self.current_account.lock:
+                    self.current_account.concurrent_messages -= 1
+            except Exception as counter_error:
+                logger.error(f"[{self.current_account.email}] Critical: Error decrementing concurrent_messages counter: {counter_error}")
 
             # Send response to PowerMTA
             if success:
                 self.send_response(250, "2.0.0 OK")
             else:
                 self.send_response(smtp_code, smtp_message)
-                logger.warning(f"[{self.current_account.email}] Relay failed: {smtp_code} {smtp_message}")
+                if not success:
+                    logger.warning(f"[{self.current_account.email}] Relay failed: {smtp_code} {smtp_message}")
 
             # Reset message state
-            self.mail_from = None
-            self.rcpt_tos = []
-            self.message_data = b''
-            self.state = 'AUTH_RECEIVED'
-
-        except Exception as e:
-            logger.error(f"[{self.current_account.email}] Error processing message: {e}")
-
-            try:
-                async with self.current_account.lock:
-                    self.current_account.concurrent_messages -= 1
-            except Exception as counter_error:
-                logger.debug(f"[{self.current_account.email}] Error decrementing concurrent_messages counter: {counter_error}")
-
-            self.send_response(450, "4.4.2 Temporary service failure")
-
             self.mail_from = None
             self.rcpt_tos = []
             self.message_data = b''
