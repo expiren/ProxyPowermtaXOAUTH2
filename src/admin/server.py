@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from aiohttp import web
@@ -147,7 +148,6 @@ class AdminServer:
         Returns:
             Tuple of (success: bool, message: str, token_data: Optional[dict])
         """
-        global data
         provider = account_data['provider']
         email = account_data['email']
 
@@ -157,11 +157,9 @@ class AdminServer:
         if not token_url:
             return False, f"Unknown provider: {provider}", None
 
-        logger.info(f"[AdminServer] Verifying OAuth2 credentials for {email}...")
-
         try:
             if provider == 'gmail':
-                data = {
+                post_data = {
                     'client_id': account_data['client_id'],
                     'client_secret': account_data['client_secret'],
                     'refresh_token': account_data['refresh_token'],
@@ -172,7 +170,7 @@ class AdminServer:
                 # IMPORTANT: Do NOT include scope parameter during token refresh
                 # The refresh token already has scopes embedded from initial authorization
                 # Requesting different scopes will cause "unauthorized or expired" error
-                data = {
+                post_data = {
                     'client_id': account_data['client_id'],
                     'refresh_token': account_data['refresh_token'],
                     'grant_type': 'refresh_token',
@@ -181,16 +179,15 @@ class AdminServer:
 
                 # Add client_secret only if provided
                 if account_data.get('client_secret'):
-                    data['client_secret'] = account_data['client_secret']
+                    post_data['client_secret'] = account_data['client_secret']
 
             # Use aiohttp for async request (3s timeout - OAuth2 APIs respond in 1-2s typically)
             async with aiohttp.ClientSession() as session:
-                async with session.post(token_url, data=data, timeout=aiohttp.ClientTimeout(total=3)) as response:
+                async with session.post(token_url, data=post_data, timeout=aiohttp.ClientTimeout(total=3)) as response:
                     if response.status == 200:
                         token_data = await response.json()
                         access_token = token_data.get('access_token')
                         if access_token:
-                            logger.info(f"[AdminServer] OAuth2 credentials verified for {account_data['email']}")
                             return True, "Credentials verified", token_data
                         else:
                             return False, "No access token in response", None
@@ -750,14 +747,10 @@ class AdminServer:
 
             # Verify all accounts in parallel (MUCH faster!)
             if verification_tasks:
-                logger.info(f"[AdminServer] Verifying {len(verification_tasks)} accounts in parallel...")
-                import time
                 start_time = time.time()
-
                 results = await asyncio.gather(*verification_tasks, return_exceptions=True)
-
                 duration = time.time() - start_time
-                logger.info(f"[AdminServer] Parallel verification completed in {duration:.2f}s")
+                logger.debug(f"[AdminServer] Verified {len(verification_tasks)} accounts in parallel ({duration:.2f}s)")
 
                 # Check results
                 failed_accounts = []
@@ -791,22 +784,24 @@ class AdminServer:
             existing_accounts = self._load_accounts()
             existing_emails = {acc.get('email') for acc in existing_accounts}
 
-            # Check for duplicates
-            overwrite = data[0].get('overwrite', False) if data else False
+            # Check for duplicates and handle overwrite
             duplicates = [acc['email'] for acc in accounts_to_add if acc['email'] in existing_emails]
 
-            if duplicates and not overwrite:
-                return web.json_response(
-                    {
-                        'success': False,
-                        'error': f'{len(duplicates)} accounts already exist. Use "overwrite": true to replace them.',
-                        'duplicates': duplicates
-                    },
-                    status=409
-                )
+            if duplicates:
+                # Check if any account in batch has overwrite=true
+                has_overwrite = any(account_data.get('overwrite', False) for account_data in data)
 
-            # Remove duplicates if overwriting
-            if overwrite:
+                if not has_overwrite:
+                    return web.json_response(
+                        {
+                            'success': False,
+                            'error': f'{len(duplicates)} accounts already exist. Use "overwrite": true to replace them.',
+                            'duplicates': duplicates
+                        },
+                        status=409
+                    )
+
+                # Remove duplicates if any account has overwrite
                 emails_to_add = {acc['email'] for acc in accounts_to_add}
                 existing_accounts = [acc for acc in existing_accounts if acc.get('email') not in emails_to_add]
 
