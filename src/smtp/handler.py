@@ -72,7 +72,6 @@ class SMTPProxyHandler(asyncio.Protocol):
         """New connection established"""
         self.transport = transport
         self.peername = transport.get_extra_info('peername')
-        logger.info(f"Connection made from {self.peername}")
 
         # Send initial greeting
         self.send_response(220, "ESMTP service ready")
@@ -85,18 +84,40 @@ class SMTPProxyHandler(asyncio.Protocol):
         """Connection closed"""
         if exc:
             logger.error(f"Connection lost (error): {exc}")
-        else:
-            logger.info(f"Connection closed normally")
 
         # Cancel processing task
         if self.processing_task and not self.processing_task.done():
             self.processing_task.cancel()
 
-        # Update metrics synchronously (no task needed - runs in event loop)
+        # ✅ FIX BUG #3: Clear line queue to prevent memory leak
+        while not self.line_queue.empty():
+            try:
+                self.line_queue.get_nowait()
+                self.line_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        # ✅ FIX BUG #1: Use async task to decrement counter with proper locking
+        # connection_lost() is NOT async, so we must create a task for async operations
         if self.current_account:
-            # Decrement active connections count (unified tracking in account object)
+            if self.state == 'DATA_RECEIVING':
+                # Schedule async cleanup (runs after connection_lost returns)
+                asyncio.create_task(self._cleanup_on_disconnect())
+
+            # Decrement active connections count (synchronous, no lock needed)
             if self.current_account.active_connections > 0:
                 self.current_account.active_connections -= 1
+
+    async def _cleanup_on_disconnect(self):
+        """Async helper to cleanup counter with proper locking (BUG #1 FIX)"""
+        if self.current_account:
+            async with self.current_account.lock:
+                if self.current_account.concurrent_messages > 0:
+                    self.current_account.concurrent_messages -= 1
+                    logger.debug(
+                        f"[{self.current_account.email}] Connection lost during message processing, "
+                        f"decremented concurrent_messages to {self.current_account.concurrent_messages}"
+                    )
 
     def data_received(self, data):
         """Data received from client"""
@@ -229,14 +250,10 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.send_response(250, "8BITMIME", continue_response=False)
         self.state = 'HELO_RECEIVED'
 
-        logger.info(f"[{self.peername}] EHLO received: {hostname}")
-
     async def handle_helo(self, hostname: str):
         """Handle HELO command"""
         self.send_response(250, f"xoauth2-proxy Hello {hostname}")
         self.state = 'HELO_RECEIVED'
-
-        logger.info(f"[{self.peername}] HELO received: {hostname}")
 
     async def handle_auth(self, auth_data: str):
         """Handle AUTH PLAIN command"""
@@ -266,8 +283,6 @@ class SMTPProxyHandler(asyncio.Protocol):
             auth_email = parts[1]  # authenticate-id
             auth_password = parts[2]  # password (ignored, proxy uses refresh token)
 
-            logger.info(f"[{self.peername}] AUTH attempt for {auth_email}")
-
             # Look up account
             account = await self.config_manager.get_by_email(auth_email)
             if not account:
@@ -285,12 +300,6 @@ class SMTPProxyHandler(asyncio.Protocol):
                 needs_refresh = account.token is None or (not is_dummy_token and account.token.is_expired())
 
                 if needs_refresh or is_dummy_token:
-                    if is_dummy_token:
-                        logger.debug(f"[{auth_email}] Initial token fetch (checking cache first)")
-                    else:
-                        token_status = 'missing' if account.token is None else 'expired'
-                        logger.info(f"[{auth_email}] Token {token_status}, refreshing")
-
                     # For dummy tokens, don't force refresh - let OAuth2Manager check cache first
                     # For real expired tokens, force refresh
                     force_refresh = not is_dummy_token
@@ -314,7 +323,6 @@ class SMTPProxyHandler(asyncio.Protocol):
             self.current_account = account
             self.authenticated = True
 
-            logger.info(f"[{self.peername}] AUTH successful for {auth_email}")
             self.send_response(235, "2.7.0 Authentication successful")
             self.state = 'AUTH_RECEIVED'
 
@@ -335,7 +343,6 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         # RFC 5321 Section 4.1.2: Empty address <> is valid for bounce messages
         self.mail_from = match.group(1) if match.group(1) else ""
-        logger.info(f"[{self.current_account.email}] MAIL FROM: <{self.mail_from}>")
         self.send_response(250, "2.1.0 OK")
 
     async def handle_rcpt(self, args: str):
@@ -361,7 +368,6 @@ class SMTPProxyHandler(asyncio.Protocol):
 
         rcpt_to = match.group(1)
         self.rcpt_tos.append(rcpt_to)
-        logger.info(f"[{self.current_account.email}] RCPT TO: {rcpt_to}")
         self.send_response(250, "2.1.5 OK")
 
     async def handle_data(self):
@@ -392,19 +398,17 @@ class SMTPProxyHandler(asyncio.Protocol):
             # ✅ Increment concurrency counter after check passes
             self.current_account.concurrent_messages += 1
 
-        logger.info(
-            f"[{self.current_account.email}] DATA: {len(self.rcpt_tos)} recipients "
-            f"(concurrent={self.current_account.concurrent_messages}/{self.current_account.max_concurrent_messages})"
-        )
         self.send_response(354, "Start mail input; end with <CRLF>.<CRLF>")
         self.state = 'DATA_RECEIVING'
         self.message_data = b''
 
     async def handle_message_data(self, data: bytes):
         """Handle message data (called when <CRLF>.<CRLF> received)"""
-        try:
-            logger.info(f"[{self.current_account.email}] Processing message for {len(self.rcpt_tos)} recipients")
+        success = False
+        smtp_code = 450
+        smtp_message = "4.4.2 Temporary service failure"
 
+        try:
             # ✅ Acquire global semaphore for backpressure (limits concurrent message processing)
             if self.global_semaphore:
                 async with self.global_semaphore:
@@ -426,35 +430,30 @@ class SMTPProxyHandler(asyncio.Protocol):
                     dry_run=self.dry_run
                 )
 
-            # Update concurrency
-            async with self.current_account.lock:
-                self.current_account.concurrent_messages -= 1
-
-            # Send response to PowerMTA
-            if success:
-                self.send_response(250, "2.0.0 OK")
-                logger.info(f"[{self.current_account.email}] Relayed message successfully")
-            else:
-                self.send_response(smtp_code, smtp_message)
-                logger.warning(f"[{self.current_account.email}] Relay failed: {smtp_code} {smtp_message}")
-
-            # Reset message state
-            self.mail_from = None
-            self.rcpt_tos = []
-            self.message_data = b''
-            self.state = 'AUTH_RECEIVED'
-
         except Exception as e:
             logger.error(f"[{self.current_account.email}] Error processing message: {e}")
+            success = False
+            smtp_code = 450
+            smtp_message = "4.4.2 Temporary service failure"
 
+        finally:
+            # ✅ FIX BUG #2: ALWAYS decrement counter in finally block
+            # This prevents counter leak if exception occurs before normal decrement
             try:
                 async with self.current_account.lock:
                     self.current_account.concurrent_messages -= 1
             except Exception as counter_error:
-                logger.debug(f"[{self.current_account.email}] Error decrementing concurrent_messages counter: {counter_error}")
+                logger.error(f"[{self.current_account.email}] Critical: Error decrementing concurrent_messages counter: {counter_error}")
 
-            self.send_response(450, "4.4.2 Temporary service failure")
+            # Send response to PowerMTA
+            if success:
+                self.send_response(250, "2.0.0 OK")
+            else:
+                self.send_response(smtp_code, smtp_message)
+                if not success:
+                    logger.warning(f"[{self.current_account.email}] Relay failed: {smtp_code} {smtp_message}")
 
+            # Reset message state
             self.mail_from = None
             self.rcpt_tos = []
             self.message_data = b''
@@ -467,12 +466,10 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.message_data = b''
         self.state = 'AUTH_RECEIVED' if self.authenticated else 'HELO_RECEIVED'
 
-        logger.info(f"[{self.peername}] RSET")
         self.send_response(250, "2.0.0 OK")
 
     async def handle_quit(self):
         """Handle QUIT command"""
-        logger.info(f"[{self.peername}] QUIT")
         self.send_response(221, "2.0.0 Goodbye")
         self.transport.close()
 
@@ -482,29 +479,21 @@ class SMTPProxyHandler(asyncio.Protocol):
         if not continue_response:
             if code == 250 and message == "OK":
                 self.transport.write(_RESPONSE_OK)
-                logger.debug(f"[{self.peername}] >> 250 OK")
                 return
             elif code == 250 and message == "2.1.0 OK":
                 self.transport.write(_RESPONSE_250_OK)
-                logger.debug(f"[{self.peername}] >> 250 2.1.0 OK")
                 return
             elif code == 250 and message == "2.0.0 OK":
                 self.transport.write(_RESPONSE_250_DATA_OK)
-                logger.debug(f"[{self.peername}] >> 250 2.0.0 OK")
                 return
             elif code == 354 and message == "Start mail input; end with <CRLF>.<CRLF>":
                 self.transport.write(_RESPONSE_354_START_DATA)
-                logger.debug(f"[{self.peername}] >> 354 Start mail input")
                 return
             elif code == 502 and message == "Command not implemented":
                 self.transport.write(_RESPONSE_502_NOT_IMPL)
-                logger.debug(f"[{self.peername}] >> 502 Command not implemented")
                 return
 
         # Slow path: encode on demand for uncommon responses
         separator = '-' if continue_response else ' '
         response = f"{code}{separator}{message}\r\n".encode('utf-8')
         self.transport.write(response)
-
-        safe_msg = message[:100] if len(message) <= 100 else message[:97] + "..."
-        logger.debug(f"[{self.peername}] >> {code}{separator}{safe_msg}")

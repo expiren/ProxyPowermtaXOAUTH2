@@ -15,14 +15,14 @@
 
     "concurrency": {
       "_description": "Concurrency and queue settings for the entire proxy",
-      "global_concurrency_limit": 100,
-      "_global_concurrency_limit_doc": "Maximum concurrent messages across all accounts (default: 100, increase for high throughput)",
+      "global_concurrency_limit": 2000,
+      "_global_concurrency_limit_doc": "Maximum concurrent messages across all accounts (default: 100, HIGH-VOLUME: 2000 for 70k msg/min)",
 
-      "backpressure_queue_size": 1000,
-      "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (default: 1000)",
+      "backpressure_queue_size": 5000,
+      "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (default: 1000, HIGH-VOLUME: 5000)",
 
-      "connection_backlog": 100,
-      "_connection_backlog_doc": "TCP backlog for incoming SMTP connections (default: 100)"
+      "connection_backlog": 2048,
+      "_connection_backlog_doc": "TCP backlog for incoming SMTP connections (default: 100, HIGH-VOLUME: 2048 matches OS net.core.somaxconn)"
     },
 
     "timeouts": {
@@ -47,8 +47,8 @@
       "token_refresh_buffer_seconds": 300,
       "_token_refresh_buffer_seconds_doc": "Refresh tokens this many seconds before expiry (default: 300 = 5 minutes, prevents expiry during use)",
 
-      "token_cache_ttl_seconds": 60,
-      "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 60, reduces API calls)",
+      "token_cache_ttl_seconds": 3300,
+      "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 3300 = 55 min, matches token lifetime with 5-min buffer)",
 
       "token_default_lifetime_seconds": 3600,
       "_token_default_lifetime_seconds_doc": "Default token lifetime if provider doesn't specify (default: 3600 = 1 hour)"
@@ -130,17 +130,17 @@
       "connection_pool": {
         "_description": "Connection pool settings for Gmail accounts",
 
-        "max_connections_per_account": 40,
-        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 40)",
+        "max_connections_per_account": 20,
+        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 40, HIGH-VOLUME: 20 for faster reuse)",
 
-        "max_messages_per_connection": 50,
-        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 50)",
+        "max_messages_per_connection": 200,
+        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 50, HIGH-VOLUME: 200 for better reuse)",
 
-        "connection_max_age_seconds": 600,
-        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 600 = 10 minutes)",
+        "connection_max_age_seconds": 300,
+        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 600, HIGH-VOLUME: 300 = 5 minutes)",
 
-        "connection_idle_timeout_seconds": 120,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 120 = 2 minutes)",
+        "connection_idle_timeout_seconds": 30,
+        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 120, HIGH-VOLUME: 30 seconds)",
 
         "connection_acquire_timeout_seconds": 5,
         "_connection_acquire_timeout_seconds_doc": "Timeout for acquiring connection from pool (default: 5 seconds)"
@@ -207,17 +207,17 @@
       "connection_pool": {
         "_description": "Connection pool settings for Outlook accounts",
 
-        "max_connections_per_account": 30,
-        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 30, Outlook is more restrictive)",
+        "max_connections_per_account": 15,
+        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 30, HIGH-VOLUME: 15 for faster reuse)",
 
-        "max_messages_per_connection": 40,
-        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 40)",
+        "max_messages_per_connection": 150,
+        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 40, HIGH-VOLUME: 150 for better reuse)",
 
-        "connection_max_age_seconds": 300,
-        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 300 = 5 minutes)",
+        "connection_max_age_seconds": 240,
+        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 300, HIGH-VOLUME: 240 = 4 minutes)",
 
-        "connection_idle_timeout_seconds": 60,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60 = 1 minute)",
+        "connection_idle_timeout_seconds": 30,
+        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60, HIGH-VOLUME: 30 seconds)",
 
         "connection_acquire_timeout_seconds": 5,
         "_connection_acquire_timeout_seconds_doc": "Timeout for acquiring connection from pool (default: 5 seconds)"

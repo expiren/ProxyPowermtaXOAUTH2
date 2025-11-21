@@ -1,0 +1,83 @@
+{
+  "_comment": "RECOMMENDED FIXES for your config.json",
+
+  "CRITICAL_FIX_1_token_cache": {
+    "current": "token_cache_ttl_seconds: 60",
+    "recommended": "token_cache_ttl_seconds: 3300",
+    "reason": "60s causes token expiry false positives (tokens appear expired after 6 min instead of 1 hour)"
+  },
+
+  "HIGH_PRIORITY_FIX_2_gmail_pool": {
+    "current": {
+      "max_connections_per_account": 40,
+      "max_messages_per_connection": 50,
+      "connection_max_age_seconds": 600,
+      "connection_idle_timeout_seconds": 120
+    },
+    "recommended": {
+      "max_connections_per_account": 20,
+      "max_messages_per_connection": 200,
+      "connection_max_age_seconds": 300,
+      "connection_idle_timeout_seconds": 30
+    },
+    "reason": "High-volume optimization: fewer connections with better reuse reduces FD usage by 50%"
+  },
+
+  "HIGH_PRIORITY_FIX_3_outlook_pool": {
+    "current": {
+      "max_connections_per_account": 18,
+      "connection_idle_timeout_seconds": 60
+    },
+    "recommended": {
+      "max_connections_per_account": 15,
+      "connection_idle_timeout_seconds": 30
+    },
+    "reason": "Faster cleanup and alignment with high-volume best practices"
+  },
+
+  "MEDIUM_PRIORITY_FIX_4_gmail_rate_limits": {
+    "current": {
+      "messages_per_minute_per_connection": 30000
+    },
+    "recommended": {
+      "messages_per_minute_per_connection": 25
+    },
+    "reason": "30,000/min = 500/sec is unrealistic. Gmail allows ~2-3 msg/sec. Setting too high disables protection."
+  },
+
+  "MEDIUM_PRIORITY_FIX_5_outlook_rate_limits": {
+    "current": {
+      "messages_per_hour": 1000000,
+      "messages_per_minute_per_connection": 30000
+    },
+    "recommended": {
+      "messages_per_hour": 10000,
+      "messages_per_minute_per_connection": 15
+    },
+    "reason": "1M/hour is unrealistic. Outlook allows ~10k/day. Setting too high risks account suspension."
+  },
+
+  "LOW_PRIORITY_FIX_6_http_pool": {
+    "current": {
+      "total_connections": 10000,
+      "connections_per_host": 10000
+    },
+    "recommended": {
+      "total_connections": 500,
+      "connections_per_host": 100
+    },
+    "reason": "OAuth2 refresh is infrequent (every 55 min with caching). 10k connections waste resources."
+  },
+
+  "OPTIONAL_FIX_7_global_concurrency": {
+    "current": {
+      "global_concurrency_limit": 1000,
+      "backpressure_queue_size": 1000
+    },
+    "recommended": {
+      "global_concurrency_limit": 2000,
+      "backpressure_queue_size": 5000
+    },
+    "reason": "At 70k msg/min (1,166 msg/sec), 1000 is borderline. 2000 provides better headroom for bursts."
+  }
+}

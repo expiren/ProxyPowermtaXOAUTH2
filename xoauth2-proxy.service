@@ -1,0 +1,28 @@
+[Unit]
+Description=XOAUTH2 SMTP Proxy for PowerMTA
+After=network.target
+Documentation=file:///home/user/ProxyPowermtaXOAUTH2/README.md
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/ProxyPowermtaXOAUTH2
+ExecStart=/usr/bin/python3 /home/user/ProxyPowermtaXOAUTH2/xoauth2_proxy_v2.py --config accounts.json
+
+# FD Limits (CRITICAL for high-volume 70k msg/min)
+LimitNOFILE=65536
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=append:/var/log/xoauth2/xoauth2_proxy.log
+StandardError=append:/var/log/xoauth2/xoauth2_proxy.log
+
+# Security (optional - adjust as needed)
+# PrivateTmp=true
+# NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from aiohttp import web
@@ -147,7 +148,6 @@ class AdminServer:
         Returns:
             Tuple of (success: bool, message: str, token_data: Optional[dict])
         """
-        global data
         provider = account_data['provider']
         email = account_data['email']
 
@@ -157,11 +157,9 @@ class AdminServer:
         if not token_url:
             return False, f"Unknown provider: {provider}", None
 
-        logger.info(f"[AdminServer] Verifying OAuth2 credentials for {email}...")
-
         try:
             if provider == 'gmail':
-                data = {
+                post_data = {
                     'client_id': account_data['client_id'],
                     'client_secret': account_data['client_secret'],
                     'refresh_token': account_data['refresh_token'],
@@ -172,7 +170,7 @@ class AdminServer:
                 # IMPORTANT: Do NOT include scope parameter during token refresh
                 # The refresh token already has scopes embedded from initial authorization
                 # Requesting different scopes will cause "unauthorized or expired" error
-                data = {
+                post_data = {
                     'client_id': account_data['client_id'],
                     'refresh_token': account_data['refresh_token'],
                     'grant_type': 'refresh_token',
@@ -181,16 +179,15 @@ class AdminServer:
 
                 # Add client_secret only if provided
                 if account_data.get('client_secret'):
-                    data['client_secret'] = account_data['client_secret']
+                    post_data['client_secret'] = account_data['client_secret']
 
-            # Use aiohttp for async request
+            # Use aiohttp for async request (10s timeout - allows for rate limiting/network delays with parallel requests)
             async with aiohttp.ClientSession() as session:
-                async with session.post(token_url, data=data, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                async with session.post(token_url, data=post_data, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         token_data = await response.json()
                         access_token = token_data.get('access_token')
                         if access_token:
-                            logger.info(f"[AdminServer] OAuth2 credentials verified for {account_data['email']}")
                             return True, "Credentials verified", token_data
                         else:
                             return False, "No access token in response", None
@@ -640,6 +637,260 @@ class AdminServer:
                 status=500
             )
 
+    async def handle_add_accounts_batch(self, request: web.Request) -> web.Response:
+        """Handle POST /admin/accounts/batch - Add multiple accounts with parallel verification"""
+        try:
+            # Parse JSON body
+            try:
+                data = await request.json()
+            except json.JSONDecodeError:
+                return web.json_response(
+                    {'success': False, 'error': 'Invalid JSON'},
+                    status=400
+                )
+
+            # Validate it's a list
+            if not isinstance(data, list):
+                return web.json_response(
+                    {'success': False, 'error': 'Body must be an array of account objects'},
+                    status=400
+                )
+
+            if len(data) == 0:
+                return web.json_response(
+                    {'success': False, 'error': 'Empty array provided'},
+                    status=400
+                )
+
+            if len(data) > 100:
+                return web.json_response(
+                    {'success': False, 'error': 'Maximum 100 accounts per batch'},
+                    status=400
+                )
+
+            logger.info(f"[AdminServer] Batch adding {len(data)} accounts...")
+
+            # Verify all accounts in parallel
+            verification_tasks = []
+            accounts_to_add = []
+
+            for idx, account_data in enumerate(data):
+                # Validate required fields
+                required_fields = ['email', 'provider', 'client_id', 'refresh_token']
+                missing_fields = [f for f in required_fields if f not in account_data or not account_data[f]]
+
+                if missing_fields:
+                    return web.json_response(
+                        {
+                            'success': False,
+                            'error': f'Account {idx}: Missing required fields: {", ".join(missing_fields)}'
+                        },
+                        status=400
+                    )
+
+                email = account_data['email'].strip()
+                provider = account_data['provider'].strip().lower()
+
+                # Validate
+                if not self._validate_email(email):
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: Invalid email format: {email}'},
+                        status=400
+                    )
+
+                if provider not in ['gmail', 'outlook']:
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: Provider must be "gmail" or "outlook"'},
+                        status=400
+                    )
+
+                if provider == 'gmail' and not account_data.get('client_secret'):
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: client_secret required for Gmail'},
+                        status=400
+                    )
+
+                # Build account object
+                oauth_endpoint = self._get_oauth_endpoint(provider)
+                oauth_token_url = account_data.get('oauth_token_url') or self._get_token_url(provider, email)
+                account_id = account_data.get('account_id', f"{provider}_{email.replace('@', '_').replace('.', '_')}")
+                vmta_name = account_data.get('vmta_name', f"vmta-{provider}-{email.split('@')[0]}")
+
+                # Get or auto-assign IP
+                ip_address = account_data.get('ip_address', '').strip()
+                if not ip_address and self._should_auto_assign_ip():
+                    auto_ip = await self._get_next_ip()
+                    if auto_ip:
+                        ip_address = auto_ip
+
+                account = {
+                    'account_id': account_id,
+                    'email': email,
+                    'ip_address': ip_address,
+                    'vmta_name': vmta_name,
+                    'provider': provider,
+                    'oauth_endpoint': oauth_endpoint,
+                    'oauth_token_url': oauth_token_url,
+                    'client_id': account_data['client_id'].strip(),
+                    'refresh_token': account_data['refresh_token'].strip()
+                }
+
+                if account_data.get('client_secret'):
+                    account['client_secret'] = account_data['client_secret'].strip()
+
+                accounts_to_add.append(account)
+
+                # Add verification task if requested
+                verify = account_data.get('verify', True)
+                if verify:
+                    verification_tasks.append(self._verify_oauth_credentials(account))
+
+            # Verify accounts in batches to avoid overwhelming OAuth APIs
+            # Large batches (50+) can hit rate limits or cause timeouts
+            # Process in smaller batches (10 at a time) for reliability
+            if verification_tasks:
+                start_time = time.time()
+
+                # Process in batches of 10 to avoid rate limits
+                BATCH_SIZE = 10
+                all_results = []
+
+                for i in range(0, len(verification_tasks), BATCH_SIZE):
+                    batch = verification_tasks[i:i+BATCH_SIZE]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    all_results.extend(batch_results)
+
+                    # Small delay between batches to be nice to OAuth APIs
+                    if i + BATCH_SIZE < len(verification_tasks):
+                        await asyncio.sleep(0.1)  # 100ms between batches
+
+                duration = time.time() - start_time
+                logger.debug(f"[AdminServer] Verified {len(verification_tasks)} accounts in batches of {BATCH_SIZE} ({duration:.2f}s)")
+
+                # Check results
+                failed_accounts = []
+                for idx, result in enumerate(all_results):
+                    account_email = accounts_to_add[idx]['email']
+
+                    if isinstance(result, Exception):
+                        error_msg = str(result)
+                        logger.warning(f"[AdminServer] Verification failed for {account_email}: {error_msg}")
+                        failed_accounts.append({
+                            'email': account_email,
+                            'error': error_msg
+                        })
+                    elif not result[0]:  # (success, message, token_data)
+                        logger.warning(f"[AdminServer] Verification failed for {account_email}: {result[1]}")
+                        failed_accounts.append({
+                            'email': account_email,
+                            'error': result[1]
+                        })
+                    else:
+                        # Cache verification token
+                        if result[2]:
+                            await self.oauth_manager.cache_verification_token(account_email, result[2])
+
+                # ✅ NEW: Partial success pattern - save successful accounts even if some failed
+                successful_accounts = []
+                if failed_accounts:
+                    # Separate successful from failed accounts
+                    failed_emails = {f['email'] for f in failed_accounts}
+                    successful_accounts = [acc for acc in accounts_to_add if acc['email'] not in failed_emails]
+
+                    logger.warning(
+                        f"[AdminServer] Batch verification: {len(successful_accounts)} succeeded, "
+                        f"{len(failed_accounts)} failed"
+                    )
+
+                    # If ALL accounts failed, return 400 (bad request - all credentials invalid)
+                    if len(successful_accounts) == 0:
+                        return web.json_response(
+                            {
+                                'success': False,
+                                'error': f'All {len(failed_accounts)} accounts failed verification',
+                                'failed_accounts': failed_accounts,
+                                'added_count': 0
+                            },
+                            status=400
+                        )
+
+                    # Some succeeded, some failed - we'll save successful ones and return 206
+                    accounts_to_add = successful_accounts
+
+            # Load existing accounts
+            existing_accounts = self._load_accounts()
+            existing_emails = {acc.get('email') for acc in existing_accounts}
+
+            # Check for duplicates and handle overwrite (only for accounts we're actually adding)
+            duplicates = [acc['email'] for acc in accounts_to_add if acc['email'] in existing_emails]
+
+            if duplicates:
+                # Check if any account in batch has overwrite=true
+                has_overwrite = any(account_data.get('overwrite', False) for account_data in data)
+
+                if not has_overwrite:
+                    return web.json_response(
+                        {
+                            'success': False,
+                            'error': f'{len(duplicates)} accounts already exist. Use "overwrite": true to replace them.',
+                            'duplicates': duplicates,
+                            'failed_accounts': failed_accounts if failed_accounts else []
+                        },
+                        status=409
+                    )
+
+                # Remove duplicates if any account has overwrite
+                emails_to_add = {acc['email'] for acc in accounts_to_add}
+                existing_accounts = [acc for acc in existing_accounts if acc.get('email') not in emails_to_add]
+
+            # Add new accounts (successful ones only)
+            all_accounts = existing_accounts + accounts_to_add
+
+            # Save to file
+            if not self._save_accounts(all_accounts):
+                return web.json_response(
+                    {'success': False, 'error': 'Failed to save accounts to file'},
+                    status=500
+                )
+
+            logger.info(f"[AdminServer] Batch added {len(accounts_to_add)} accounts ({len(all_accounts)} total)")
+
+            # Trigger hot-reload
+            try:
+                num_accounts = await self.account_manager.reload()
+                logger.info(f"[AdminServer] Accounts reloaded: {num_accounts} accounts active")
+            except Exception as e:
+                logger.error(f"[AdminServer] Error reloading accounts: {e}")
+
+            # ✅ Return appropriate status code based on results
+            # - 200: All succeeded
+            # - 206 (Partial Content): Some succeeded, some failed
+            if failed_accounts:
+                # Partial success - return 206
+                return web.json_response({
+                    'success': 'partial',
+                    'message': f'Added {len(accounts_to_add)} accounts, {len(failed_accounts)} failed',
+                    'total_accounts': len(all_accounts),
+                    'added_count': len(accounts_to_add),
+                    'failed_count': len(failed_accounts),
+                    'failed_accounts': failed_accounts
+                }, status=206)
+            else:
+                # Full success - return 200
+                return web.json_response({
+                    'success': True,
+                    'message': f'Added {len(accounts_to_add)} accounts successfully',
+                    'total_accounts': len(all_accounts),
+                    'added_count': len(accounts_to_add)
+                })
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Error in batch add: {e}", exc_info=True)
+            return web.json_response(
+                {'success': False, 'error': f'Internal server error: {str(e)}'},
+                status=500
+            )
+
     async def start(self):
         """Start the admin HTTP server"""
         try:
@@ -649,6 +900,7 @@ class AdminServer:
             self.app.router.add_get('/health', self.handle_health)
             self.app.router.add_get('/admin/accounts', self.handle_list_accounts)
             self.app.router.add_post('/admin/accounts', self.handle_add_account)
+            self.app.router.add_post('/admin/accounts/batch', self.handle_add_accounts_batch)  # ✅ NEW: Batch endpoint
             self.app.router.add_delete('/admin/accounts/{email}', self.handle_delete_account)
             self.app.router.add_delete('/admin/accounts/invalid', self.handle_delete_invalid_accounts)
             self.app.router.add_delete('/admin/accounts', self.handle_delete_all_accounts)
@@ -665,6 +917,7 @@ class AdminServer:
             logger.info(f"[AdminServer] Health check: GET http://{self.host}:{self.port}/health")
             logger.info(f"[AdminServer] List accounts: GET http://{self.host}:{self.port}/admin/accounts")
             logger.info(f"[AdminServer] Add account: POST http://{self.host}:{self.port}/admin/accounts")
+            logger.info(f"[AdminServer] Add accounts (batch, parallel): POST http://{self.host}:{self.port}/admin/accounts/batch")
             logger.info(f"[AdminServer] Delete account: DELETE http://{self.host}:{self.port}/admin/accounts/{{email}}")
             logger.info(f"[AdminServer] Delete invalid: DELETE http://{self.host}:{self.port}/admin/accounts/invalid")
             logger.info(f"[AdminServer] Delete all: DELETE http://{self.host}:{self.port}/admin/accounts?confirm=true")

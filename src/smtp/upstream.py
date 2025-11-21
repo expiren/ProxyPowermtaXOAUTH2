@@ -84,7 +84,8 @@ class UpstreamRelay:
         Returns:
             (success: bool, smtp_code: int, message: str)
         """
-        start_time = time.time()
+        # ✅ FIX BUG #4: Removed unused start_time variable (wasted 1,166 time.time() calls/sec)
+        # start_time = time.time()
 
         try:
             # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)
@@ -93,7 +94,6 @@ class UpstreamRelay:
                     # Acquire token from rate limiter with per-account settings
                     # (raises RateLimitExceeded if over limit)
                     await self.rate_limiter.acquire(account.email, account=account)
-                    logger.debug(f"[{account.email}] Rate limit check passed")
                 except Exception as e:
                     # Rate limit exceeded - reject with temporary failure
                     logger.warning(f"[{account.email}] Rate limit exceeded: {e}")
@@ -116,20 +116,9 @@ class UpstreamRelay:
             # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
             xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
 
-            logger.debug(
-                f"[{account.email}] XOAUTH2 string prepared: "
-                f"user={mail_from}, token_length={len(token.access_token)}, "
-                f"expires_in={token.expires_in_seconds()}s"
-            )
-
             # Parse SMTP endpoint
             smtp_host, smtp_port_str = account.oauth_endpoint.split(':')
             smtp_port = int(smtp_port_str)
-
-            logger.info(
-                f"[{account.email}] Relaying to {smtp_host}:{smtp_port} "
-                f"({account.provider.upper()}) - {len(rcpt_tos)} recipient(s)"
-            )
 
             # Acquire connection from pool (reuses existing authenticated connections!)
             # ✅ Pass account object for per-account connection pool settings
@@ -145,7 +134,6 @@ class UpstreamRelay:
                 )
                 # Dry-run mode
                 if dry_run:
-                    logger.info(f"[{account.email}] DRY-RUN: Would send to {rcpt_tos}")
                     await self.connection_pool.release(account.email, connection, increment_count=False)
                     return (True, 250, "2.0.0 OK (dry-run)")
 
@@ -157,7 +145,6 @@ class UpstreamRelay:
 
                 # ✅ USE LOW-LEVEL SMTP COMMANDS FOR CONNECTION REUSE
                 # This keeps connection state clean and ready for next message
-                logger.info(f"[{account.email}] Sending message to {rcpt_tos[0] if rcpt_tos else 'unknown'}...")
 
                 # MAIL FROM
                 code, msg = await connection.mail(mail_from)
@@ -190,12 +177,6 @@ class UpstreamRelay:
                 # ✅ SUCCESS - Return connection to pool (KEEP ALIVE for reuse)
                 # Connection is now in clean state, ready for next MAIL FROM command
                 await self.connection_pool.release(account.email, connection, increment_count=True)
-
-                duration = time.time() - start_time
-                logger.info(
-                    f"[{account.email}] Message relayed successfully to {len(rcpt_tos)} recipient(s) "
-                    f"({duration:.3f}s)"
-                )
 
                 if rejected_recipients:
                     rejected_str = ", ".join(rejected_recipients[:3])
