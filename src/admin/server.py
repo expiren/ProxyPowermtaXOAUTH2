@@ -181,9 +181,9 @@ class AdminServer:
                 if account_data.get('client_secret'):
                     post_data['client_secret'] = account_data['client_secret']
 
-            # Use aiohttp for async request (3s timeout - OAuth2 APIs respond in 1-2s typically)
+            # Use aiohttp for async request (10s timeout - allows for rate limiting/network delays with parallel requests)
             async with aiohttp.ClientSession() as session:
-                async with session.post(token_url, data=post_data, timeout=aiohttp.ClientTimeout(total=3)) as response:
+                async with session.post(token_url, data=post_data, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         token_data = await response.json()
                         access_token = token_data.get('access_token')
@@ -745,30 +745,50 @@ class AdminServer:
                 if verify:
                     verification_tasks.append(self._verify_oauth_credentials(account))
 
-            # Verify all accounts in parallel (MUCH faster!)
+            # Verify accounts in batches to avoid overwhelming OAuth APIs
+            # Large batches (50+) can hit rate limits or cause timeouts
+            # Process in smaller batches (10 at a time) for reliability
             if verification_tasks:
                 start_time = time.time()
-                results = await asyncio.gather(*verification_tasks, return_exceptions=True)
+
+                # Process in batches of 10 to avoid rate limits
+                BATCH_SIZE = 10
+                all_results = []
+
+                for i in range(0, len(verification_tasks), BATCH_SIZE):
+                    batch = verification_tasks[i:i+BATCH_SIZE]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    all_results.extend(batch_results)
+
+                    # Small delay between batches to be nice to OAuth APIs
+                    if i + BATCH_SIZE < len(verification_tasks):
+                        await asyncio.sleep(0.1)  # 100ms between batches
+
                 duration = time.time() - start_time
-                logger.debug(f"[AdminServer] Verified {len(verification_tasks)} accounts in parallel ({duration:.2f}s)")
+                logger.debug(f"[AdminServer] Verified {len(verification_tasks)} accounts in batches of {BATCH_SIZE} ({duration:.2f}s)")
 
                 # Check results
                 failed_accounts = []
-                for idx, result in enumerate(results):
+                for idx, result in enumerate(all_results):
+                    account_email = accounts_to_add[idx]['email']
+
                     if isinstance(result, Exception):
+                        error_msg = str(result)
+                        logger.warning(f"[AdminServer] Verification failed for {account_email}: {error_msg}")
                         failed_accounts.append({
-                            'email': accounts_to_add[idx]['email'],
-                            'error': str(result)
+                            'email': account_email,
+                            'error': error_msg
                         })
                     elif not result[0]:  # (success, message, token_data)
+                        logger.warning(f"[AdminServer] Verification failed for {account_email}: {result[1]}")
                         failed_accounts.append({
-                            'email': accounts_to_add[idx]['email'],
+                            'email': account_email,
                             'error': result[1]
                         })
                     else:
                         # Cache verification token
                         if result[2]:
-                            await self.oauth_manager.cache_verification_token(accounts_to_add[idx]['email'], result[2])
+                            await self.oauth_manager.cache_verification_token(account_email, result[2])
 
                 if failed_accounts:
                     return web.json_response(
