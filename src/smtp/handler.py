@@ -92,6 +92,17 @@ class SMTPProxyHandler(asyncio.Protocol):
         if self.processing_task and not self.processing_task.done():
             self.processing_task.cancel()
 
+        # ✅ FIX: Decrement concurrent_messages if processing was in progress
+        # This prevents counter leak when connection lost during DATA processing
+        if self.current_account:
+            # Check if we were processing a message (state is DATA_RECEIVING and counter was incremented)
+            if self.state == 'DATA_RECEIVING' and self.current_account.concurrent_messages > 0:
+                self.current_account.concurrent_messages -= 1
+                logger.debug(
+                    f"[{self.current_account.email}] Connection lost during message processing, "
+                    f"decremented concurrent_messages to {self.current_account.concurrent_messages}"
+                )
+
         # Update metrics synchronously (no task needed - runs in event loop)
         if self.current_account:
             # Decrement active connections count (unified tracking in account object)
