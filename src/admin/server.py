@@ -183,9 +183,9 @@ class AdminServer:
                 if account_data.get('client_secret'):
                     data['client_secret'] = account_data['client_secret']
 
-            # Use aiohttp for async request
+            # Use aiohttp for async request (3s timeout - OAuth2 APIs respond in 1-2s typically)
             async with aiohttp.ClientSession() as session:
-                async with session.post(token_url, data=data, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                async with session.post(token_url, data=data, timeout=aiohttp.ClientTimeout(total=3)) as response:
                     if response.status == 200:
                         token_data = await response.json()
                         access_token = token_data.get('access_token')
@@ -640,6 +640,209 @@ class AdminServer:
                 status=500
             )
 
+    async def handle_add_accounts_batch(self, request: web.Request) -> web.Response:
+        """Handle POST /admin/accounts/batch - Add multiple accounts with parallel verification"""
+        try:
+            # Parse JSON body
+            try:
+                data = await request.json()
+            except json.JSONDecodeError:
+                return web.json_response(
+                    {'success': False, 'error': 'Invalid JSON'},
+                    status=400
+                )
+
+            # Validate it's a list
+            if not isinstance(data, list):
+                return web.json_response(
+                    {'success': False, 'error': 'Body must be an array of account objects'},
+                    status=400
+                )
+
+            if len(data) == 0:
+                return web.json_response(
+                    {'success': False, 'error': 'Empty array provided'},
+                    status=400
+                )
+
+            if len(data) > 100:
+                return web.json_response(
+                    {'success': False, 'error': 'Maximum 100 accounts per batch'},
+                    status=400
+                )
+
+            logger.info(f"[AdminServer] Batch adding {len(data)} accounts...")
+
+            # Verify all accounts in parallel
+            verification_tasks = []
+            accounts_to_add = []
+
+            for idx, account_data in enumerate(data):
+                # Validate required fields
+                required_fields = ['email', 'provider', 'client_id', 'refresh_token']
+                missing_fields = [f for f in required_fields if f not in account_data or not account_data[f]]
+
+                if missing_fields:
+                    return web.json_response(
+                        {
+                            'success': False,
+                            'error': f'Account {idx}: Missing required fields: {", ".join(missing_fields)}'
+                        },
+                        status=400
+                    )
+
+                email = account_data['email'].strip()
+                provider = account_data['provider'].strip().lower()
+
+                # Validate
+                if not self._validate_email(email):
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: Invalid email format: {email}'},
+                        status=400
+                    )
+
+                if provider not in ['gmail', 'outlook']:
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: Provider must be "gmail" or "outlook"'},
+                        status=400
+                    )
+
+                if provider == 'gmail' and not account_data.get('client_secret'):
+                    return web.json_response(
+                        {'success': False, 'error': f'Account {idx}: client_secret required for Gmail'},
+                        status=400
+                    )
+
+                # Build account object
+                oauth_endpoint = self._get_oauth_endpoint(provider)
+                oauth_token_url = account_data.get('oauth_token_url') or self._get_token_url(provider, email)
+                account_id = account_data.get('account_id', f"{provider}_{email.replace('@', '_').replace('.', '_')}")
+                vmta_name = account_data.get('vmta_name', f"vmta-{provider}-{email.split('@')[0]}")
+
+                # Get or auto-assign IP
+                ip_address = account_data.get('ip_address', '').strip()
+                if not ip_address and self._should_auto_assign_ip():
+                    auto_ip = await self._get_next_ip()
+                    if auto_ip:
+                        ip_address = auto_ip
+
+                account = {
+                    'account_id': account_id,
+                    'email': email,
+                    'ip_address': ip_address,
+                    'vmta_name': vmta_name,
+                    'provider': provider,
+                    'oauth_endpoint': oauth_endpoint,
+                    'oauth_token_url': oauth_token_url,
+                    'client_id': account_data['client_id'].strip(),
+                    'refresh_token': account_data['refresh_token'].strip()
+                }
+
+                if account_data.get('client_secret'):
+                    account['client_secret'] = account_data['client_secret'].strip()
+
+                accounts_to_add.append(account)
+
+                # Add verification task if requested
+                verify = account_data.get('verify', True)
+                if verify:
+                    verification_tasks.append(self._verify_oauth_credentials(account))
+
+            # Verify all accounts in parallel (MUCH faster!)
+            if verification_tasks:
+                logger.info(f"[AdminServer] Verifying {len(verification_tasks)} accounts in parallel...")
+                import time
+                start_time = time.time()
+
+                results = await asyncio.gather(*verification_tasks, return_exceptions=True)
+
+                duration = time.time() - start_time
+                logger.info(f"[AdminServer] Parallel verification completed in {duration:.2f}s")
+
+                # Check results
+                failed_accounts = []
+                for idx, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        failed_accounts.append({
+                            'email': accounts_to_add[idx]['email'],
+                            'error': str(result)
+                        })
+                    elif not result[0]:  # (success, message, token_data)
+                        failed_accounts.append({
+                            'email': accounts_to_add[idx]['email'],
+                            'error': result[1]
+                        })
+                    else:
+                        # Cache verification token
+                        if result[2]:
+                            await self.oauth_manager.cache_verification_token(accounts_to_add[idx]['email'], result[2])
+
+                if failed_accounts:
+                    return web.json_response(
+                        {
+                            'success': False,
+                            'error': f'{len(failed_accounts)} accounts failed verification',
+                            'failed_accounts': failed_accounts
+                        },
+                        status=400
+                    )
+
+            # Load existing accounts
+            existing_accounts = self._load_accounts()
+            existing_emails = {acc.get('email') for acc in existing_accounts}
+
+            # Check for duplicates
+            overwrite = data[0].get('overwrite', False) if data else False
+            duplicates = [acc['email'] for acc in accounts_to_add if acc['email'] in existing_emails]
+
+            if duplicates and not overwrite:
+                return web.json_response(
+                    {
+                        'success': False,
+                        'error': f'{len(duplicates)} accounts already exist. Use "overwrite": true to replace them.',
+                        'duplicates': duplicates
+                    },
+                    status=409
+                )
+
+            # Remove duplicates if overwriting
+            if overwrite:
+                emails_to_add = {acc['email'] for acc in accounts_to_add}
+                existing_accounts = [acc for acc in existing_accounts if acc.get('email') not in emails_to_add]
+
+            # Add new accounts
+            all_accounts = existing_accounts + accounts_to_add
+
+            # Save to file
+            if not self._save_accounts(all_accounts):
+                return web.json_response(
+                    {'success': False, 'error': 'Failed to save accounts to file'},
+                    status=500
+                )
+
+            logger.info(f"[AdminServer] Batch added {len(accounts_to_add)} accounts ({len(all_accounts)} total)")
+
+            # Trigger hot-reload
+            try:
+                num_accounts = await self.account_manager.reload()
+                logger.info(f"[AdminServer] Accounts reloaded: {num_accounts} accounts active")
+            except Exception as e:
+                logger.error(f"[AdminServer] Error reloading accounts: {e}")
+
+            return web.json_response({
+                'success': True,
+                'message': f'Added {len(accounts_to_add)} accounts successfully',
+                'total_accounts': len(all_accounts),
+                'added_count': len(accounts_to_add)
+            })
+
+        except Exception as e:
+            logger.error(f"[AdminServer] Error in batch add: {e}", exc_info=True)
+            return web.json_response(
+                {'success': False, 'error': f'Internal server error: {str(e)}'},
+                status=500
+            )
+
     async def start(self):
         """Start the admin HTTP server"""
         try:
@@ -649,6 +852,7 @@ class AdminServer:
             self.app.router.add_get('/health', self.handle_health)
             self.app.router.add_get('/admin/accounts', self.handle_list_accounts)
             self.app.router.add_post('/admin/accounts', self.handle_add_account)
+            self.app.router.add_post('/admin/accounts/batch', self.handle_add_accounts_batch)  # ✅ NEW: Batch endpoint
             self.app.router.add_delete('/admin/accounts/{email}', self.handle_delete_account)
             self.app.router.add_delete('/admin/accounts/invalid', self.handle_delete_invalid_accounts)
             self.app.router.add_delete('/admin/accounts', self.handle_delete_all_accounts)
@@ -665,6 +869,7 @@ class AdminServer:
             logger.info(f"[AdminServer] Health check: GET http://{self.host}:{self.port}/health")
             logger.info(f"[AdminServer] List accounts: GET http://{self.host}:{self.port}/admin/accounts")
             logger.info(f"[AdminServer] Add account: POST http://{self.host}:{self.port}/admin/accounts")
+            logger.info(f"[AdminServer] Add accounts (batch, parallel): POST http://{self.host}:{self.port}/admin/accounts/batch")
             logger.info(f"[AdminServer] Delete account: DELETE http://{self.host}:{self.port}/admin/accounts/{{email}}")
             logger.info(f"[AdminServer] Delete invalid: DELETE http://{self.host}:{self.port}/admin/accounts/invalid")
             logger.info(f"[AdminServer] Delete all: DELETE http://{self.host}:{self.port}/admin/accounts?confirm=true")
