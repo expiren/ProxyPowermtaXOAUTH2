@@ -174,23 +174,17 @@ class SMTPConnectionPool:
 
                     # Check if connection should be removed
                     if pooled.is_expired(self.connection_max_age):
-                        logger.debug(f"[Pool] Connection expired for {account_email}")
                         await self._close_connection(pooled)
                         to_remove.append(pooled)
                         continue
 
                     if pooled.is_idle_too_long(self.connection_idle_timeout):
-                        logger.debug(f"[Pool] Connection idle too long for {account_email}")
                         await self._close_connection(pooled)
                         to_remove.append(pooled)
                         continue
 
                     # Check if connection used too many times (✅ uses per-account setting!)
                     if pooled.message_count >= max_msg:
-                        logger.debug(
-                            f"[Pool] Connection reached max messages ({pooled.message_count}/{max_msg}) "
-                            f"for {account_email}"
-                        )
                         await self._close_connection(pooled)
                         to_remove.append(pooled)
                         continue
@@ -205,11 +199,6 @@ class SMTPConnectionPool:
                     pooled.semaphore = semaphore  # Track semaphore for this connection
                     self.stats['pool_hits'] += 1
                     self.stats['connections_reused'] += 1
-
-                    logger.debug(
-                        f"[Pool] Reusing connection for {account_email} "
-                        f"(msg_count={pooled.message_count}, age={int((datetime.now(UTC) - pooled.created_at).total_seconds())}s)"
-                    )
 
                     # Remove bad connections (one pass instead of multiple remove() calls)
                     if to_remove:
@@ -231,7 +220,6 @@ class SMTPConnectionPool:
                     non_busy = [p for p in pool if not p.is_busy]
                     if non_busy:
                         oldest = min(non_busy, key=lambda p: p.created_at)
-                        logger.debug(f"[Pool] Closing oldest connection for {account_email}")
                         await self._close_connection(oldest)
                         # Filter out the oldest connection (O(n) but single pass)
                         self.pools[account_email] = deque(p for p in pool if p is not oldest)
@@ -274,10 +262,6 @@ class SMTPConnectionPool:
                                         f"Proceeding without IP binding."
                                     )
                                     source_ip = None  # Don't use invalid IP
-                                else:
-                                    logger.debug(f"[Pool] Validated source IP {source_ip} for {account_email}")
-                            else:
-                                logger.debug(f"[Pool] Using source IP {source_ip} for {account_email} (validation disabled)")
 
                 # Create new connection
                 connection = await self._create_connection(
@@ -301,10 +285,6 @@ class SMTPConnectionPool:
                 pool.append(pooled)
 
                 self.stats['connections_created'] += 1
-                logger.info(
-                    f"[Pool] Created new connection for {account_email} "
-                    f"(pool_size={len(pool)}/{self.max_connections_per_account})"
-                )
 
                 return connection
         except Exception as e:
@@ -341,10 +321,6 @@ class SMTPConnectionPool:
                         pooled.semaphore.release()
                         pooled.semaphore = None  # Clear reference
 
-                    logger.debug(
-                        f"[Pool] Released connection for {account_email} "
-                        f"(msg_count={pooled.message_count})"
-                    )
                     return
 
     async def remove_and_close(self, account_email: str, connection: aiosmtplib.SMTP):
@@ -383,10 +359,6 @@ class SMTPConnectionPool:
                     # Close connection
                     await self._close_connection(pooled)
 
-                    logger.debug(
-                        f"[Pool] Removed and closed bad connection for {account_email} "
-                        f"(pool_size={len(self.pools[account_email])})"
-                    )
                     return
 
             # Connection not found in pool, close it anyway
@@ -420,9 +392,6 @@ class SMTPConnectionPool:
             # Format: (ip, port) where port=0 means "any available port"
             source_address = (source_ip, 0) if source_ip else None
 
-            if source_ip:
-                logger.debug(f"[Pool] Binding connection to source IP {source_ip} for {account_email}")
-
             # Create connection
             # For port 587: use_tls=False (we'll use STARTTLS explicitly)
             # For port 465: use_tls=True (implicit TLS)
@@ -437,18 +406,14 @@ class SMTPConnectionPool:
 
             # Connect
             await smtp.connect()
-            logger.debug(f"[Pool] Connected to {smtp_host}:{smtp_port} for {account_email}")
 
             # STARTTLS (always required for port 587)
             # Note: Port 587 is the submission port and requires STARTTLS
             if smtp_port == 587 or smtp.supports_extension('STARTTLS'):
                 await smtp.starttls()
-                logger.debug(f"[Pool] STARTTLS completed for {account_email}")
-
 
                 # Send EHLO again after STARTTLS (required by RFC 3207)
                 await smtp.ehlo()
-                logger.debug(f"[Pool] EHLO sent after STARTTLS for {account_email}")
 
             # Authenticate with XOAUTH2
             # XOAUTH2 sends: AUTH XOAUTH2 <base64_xoauth2_string>
@@ -459,12 +424,6 @@ class SMTPConnectionPool:
 
             if response.code != 235:
                 raise Exception(f"XOAUTH2 authentication failed: {response.code} {response.message}")
-
-            logger.info(f"[Pool] Authenticated {account_email} with XOAUTH2")
-
-            # ✅ Log successful connection with source IP info
-            if source_ip:
-                logger.info(f"[Pool] Successfully connected from source IP {source_ip} for {account_email}")
 
             return smtp
 
@@ -491,9 +450,8 @@ class SMTPConnectionPool:
         try:
             await pooled.connection.quit()
             self.stats['connections_closed'] += 1
-            logger.debug(f"[Pool] Closed connection for {pooled.account_email}")
         except Exception as e:
-            logger.debug(f"[Pool] Error closing connection for {pooled.account_email}: {e}")
+            pass  # Ignore errors during close
         finally:
             # ✅ Defensive release semaphore if this connection was still holding one
             # This should only happen if there's a bug (non-busy connections should have semaphore=None)
