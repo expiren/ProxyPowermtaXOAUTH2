@@ -136,11 +136,15 @@ class UpstreamRelay:
                     await self.connection_pool.release(account.email, connection, increment_count=False)
                     return (True, 250, "2.0.0 OK (dry-run)")
 
-                # Convert message_data to string if needed
-                if isinstance(message_data, bytes):
-                    message_str = message_data.decode('utf-8', errors='replace')
+                # ✅ FIX: Keep message_data as bytes to preserve Unicode characters
+                # Email messages should be handled as bytes throughout SMTP protocol
+                # Converting to string causes aiosmtplib to re-encode with ASCII (fails on Unicode!)
+                # Examples that fail with ASCII: Don't (curly apostrophe \u2019), café, etc.
+                if not isinstance(message_data, bytes):
+                    # If somehow we got a string, encode it to UTF-8 bytes
+                    message_bytes = message_data.encode('utf-8')
                 else:
-                    message_str = message_data
+                    message_bytes = message_data
 
                 # ✅ USE LOW-LEVEL SMTP COMMANDS FOR CONNECTION REUSE
                 # This keeps connection state clean and ready for next message
@@ -166,8 +170,8 @@ class UpstreamRelay:
                     await self.connection_pool.remove_and_close(account.email, connection)
                     return (False, 553, "5.1.3 All recipients rejected")
 
-                # DATA (send message body)
-                code, msg = await connection.data(message_str)
+                # DATA (send message body) - pass bytes directly to preserve encoding
+                code, msg = await connection.data(message_bytes)
                 if code != 250:
                     logger.error(f"[{account.email}] DATA rejected: {code} {msg}")
                     await self.connection_pool.remove_and_close(account.email, connection)
