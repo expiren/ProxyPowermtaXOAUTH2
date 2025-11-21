@@ -790,21 +790,38 @@ class AdminServer:
                         if result[2]:
                             await self.oauth_manager.cache_verification_token(account_email, result[2])
 
+                # ✅ NEW: Partial success pattern - save successful accounts even if some failed
+                successful_accounts = []
                 if failed_accounts:
-                    return web.json_response(
-                        {
-                            'success': False,
-                            'error': f'{len(failed_accounts)} accounts failed verification',
-                            'failed_accounts': failed_accounts
-                        },
-                        status=400
+                    # Separate successful from failed accounts
+                    failed_emails = {f['email'] for f in failed_accounts}
+                    successful_accounts = [acc for acc in accounts_to_add if acc['email'] not in failed_emails]
+
+                    logger.warning(
+                        f"[AdminServer] Batch verification: {len(successful_accounts)} succeeded, "
+                        f"{len(failed_accounts)} failed"
                     )
+
+                    # If ALL accounts failed, return 400 (bad request - all credentials invalid)
+                    if len(successful_accounts) == 0:
+                        return web.json_response(
+                            {
+                                'success': False,
+                                'error': f'All {len(failed_accounts)} accounts failed verification',
+                                'failed_accounts': failed_accounts,
+                                'added_count': 0
+                            },
+                            status=400
+                        )
+
+                    # Some succeeded, some failed - we'll save successful ones and return 206
+                    accounts_to_add = successful_accounts
 
             # Load existing accounts
             existing_accounts = self._load_accounts()
             existing_emails = {acc.get('email') for acc in existing_accounts}
 
-            # Check for duplicates and handle overwrite
+            # Check for duplicates and handle overwrite (only for accounts we're actually adding)
             duplicates = [acc['email'] for acc in accounts_to_add if acc['email'] in existing_emails]
 
             if duplicates:
@@ -816,7 +833,8 @@ class AdminServer:
                         {
                             'success': False,
                             'error': f'{len(duplicates)} accounts already exist. Use "overwrite": true to replace them.',
-                            'duplicates': duplicates
+                            'duplicates': duplicates,
+                            'failed_accounts': failed_accounts if failed_accounts else []
                         },
                         status=409
                     )
@@ -825,7 +843,7 @@ class AdminServer:
                 emails_to_add = {acc['email'] for acc in accounts_to_add}
                 existing_accounts = [acc for acc in existing_accounts if acc.get('email') not in emails_to_add]
 
-            # Add new accounts
+            # Add new accounts (successful ones only)
             all_accounts = existing_accounts + accounts_to_add
 
             # Save to file
@@ -844,12 +862,27 @@ class AdminServer:
             except Exception as e:
                 logger.error(f"[AdminServer] Error reloading accounts: {e}")
 
-            return web.json_response({
-                'success': True,
-                'message': f'Added {len(accounts_to_add)} accounts successfully',
-                'total_accounts': len(all_accounts),
-                'added_count': len(accounts_to_add)
-            })
+            # ✅ Return appropriate status code based on results
+            # - 200: All succeeded
+            # - 206 (Partial Content): Some succeeded, some failed
+            if failed_accounts:
+                # Partial success - return 206
+                return web.json_response({
+                    'success': 'partial',
+                    'message': f'Added {len(accounts_to_add)} accounts, {len(failed_accounts)} failed',
+                    'total_accounts': len(all_accounts),
+                    'added_count': len(accounts_to_add),
+                    'failed_count': len(failed_accounts),
+                    'failed_accounts': failed_accounts
+                }, status=206)
+            else:
+                # Full success - return 200
+                return web.json_response({
+                    'success': True,
+                    'message': f'Added {len(accounts_to_add)} accounts successfully',
+                    'total_accounts': len(all_accounts),
+                    'added_count': len(accounts_to_add)
+                })
 
         except Exception as e:
             logger.error(f"[AdminServer] Error in batch add: {e}", exc_info=True)
