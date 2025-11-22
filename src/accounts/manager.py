@@ -14,7 +14,10 @@ class AccountManager:
     """Manages accounts with in-memory caching"""
 
     def __init__(self, config_path: Path, proxy_config=None):
-        self.config_path = config_path
+        # ✅ FIX: Ensure config_path is absolute (same as AdminServer)
+        # This prevents path mismatch when AdminServer saves to absolute path
+        # but AccountManager looks for relative path
+        self.config_path = Path(config_path).resolve()
         self.proxy_config = proxy_config  # ✅ Store proxy_config
         self.accounts: Dict[str, AccountConfig] = {}  # email -> account
         self.accounts_by_id: Dict[str, AccountConfig] = {}  # account_id -> account
