@@ -19,6 +19,20 @@ class ConnectionPoolConfig:
     connection_max_age_seconds: int = 300
     connection_idle_timeout_seconds: int = 60
     connection_acquire_timeout_seconds: int = 5
+    # ✅ Adaptive pre-warming configuration (replaces fixed prewarm_percentage)
+    adaptive_prewarm_enabled: bool = True
+    prewarm_min_connections: int = 1
+    prewarm_max_connections: int = 10
+    prewarm_min_message_threshold: int = 100
+    prewarm_messages_per_connection: int = 10  # ✅ NEW: 1 connection per ~10 concurrent messages
+    prewarm_concurrent_tasks: int = 100
+    # ✅ Lazy connection refresh (replaces periodic_rewarm_enabled)
+    idle_connection_reuse_timeout: int = 120
+    # Deprecated (kept for backwards compatibility):
+    prewarm_percentage: int = 50
+    periodic_rewarm_enabled: bool = True
+    periodic_rewarm_interval_seconds: int = 300
+    rewarm_concurrent_tasks: int = 50
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ConnectionPoolConfig':
@@ -29,6 +43,19 @@ class ConnectionPoolConfig:
             connection_max_age_seconds=data.get('connection_max_age_seconds', 300),
             connection_idle_timeout_seconds=data.get('connection_idle_timeout_seconds', 60),
             connection_acquire_timeout_seconds=data.get('connection_acquire_timeout_seconds', 5),
+            adaptive_prewarm_enabled=data.get('adaptive_prewarm_enabled', True),
+            prewarm_min_connections=data.get('prewarm_min_connections', 1),
+            prewarm_max_connections=data.get('prewarm_max_connections', 10),
+            prewarm_min_message_threshold=max(0, data.get('prewarm_min_message_threshold', 100)),
+            # ✅ FIX: Ensure prewarm_messages_per_connection >= 1 to prevent division by zero
+            prewarm_messages_per_connection=max(1, data.get('prewarm_messages_per_connection', 10)),
+            prewarm_concurrent_tasks=data.get('prewarm_concurrent_tasks', 100),
+            idle_connection_reuse_timeout=data.get('idle_connection_reuse_timeout', 120),
+            # Deprecated:
+            prewarm_percentage=data.get('prewarm_percentage', 50),
+            periodic_rewarm_enabled=data.get('periodic_rewarm_enabled', True),
+            periodic_rewarm_interval_seconds=data.get('periodic_rewarm_interval_seconds', 300),
+            rewarm_concurrent_tasks=data.get('rewarm_concurrent_tasks', 50),
         )
 
 
@@ -255,13 +282,19 @@ class ProxyConfig:
         """Load default provider configurations"""
         logger.info("[ProxyConfig] Loading default provider configurations")
 
-        # Default Gmail config
+        # Default Gmail config (✅ with adaptive pre-warming)
         self.providers['gmail'] = ProviderConfig(
             connection_pool=ConnectionPoolConfig(
                 max_connections_per_account=40,
                 max_messages_per_connection=50,
                 connection_max_age_seconds=600,
                 connection_idle_timeout_seconds=120,
+                adaptive_prewarm_enabled=True,
+                prewarm_min_connections=1,
+                prewarm_max_connections=10,
+                prewarm_min_message_threshold=100,
+                prewarm_messages_per_connection=10,
+                idle_connection_reuse_timeout=120,
             ),
             rate_limiting=RateLimitConfig(
                 messages_per_hour=10000,
@@ -272,13 +305,19 @@ class ProxyConfig:
             circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
         )
 
-        # Default Outlook config
+        # Default Outlook config (✅ with adaptive pre-warming)
         self.providers['outlook'] = ProviderConfig(
             connection_pool=ConnectionPoolConfig(
                 max_connections_per_account=30,
                 max_messages_per_connection=40,
                 connection_max_age_seconds=300,
                 connection_idle_timeout_seconds=60,
+                adaptive_prewarm_enabled=True,
+                prewarm_min_connections=1,
+                prewarm_max_connections=8,
+                prewarm_min_message_threshold=100,
+                prewarm_messages_per_connection=10,
+                idle_connection_reuse_timeout=120,
             ),
             rate_limiting=RateLimitConfig(
                 messages_per_hour=10000,
@@ -289,11 +328,17 @@ class ProxyConfig:
             circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
         )
 
-        # Default fallback config
+        # Default fallback config (✅ with adaptive pre-warming)
         self.providers['default'] = ProviderConfig(
             connection_pool=ConnectionPoolConfig(
                 max_connections_per_account=30,
                 max_messages_per_connection=50,
+                adaptive_prewarm_enabled=True,
+                prewarm_min_connections=1,
+                prewarm_max_connections=8,
+                prewarm_min_message_threshold=100,
+                prewarm_messages_per_connection=10,
+                idle_connection_reuse_timeout=120,
             ),
             rate_limiting=RateLimitConfig(messages_per_hour=5000),
             retry=RetryConfig(max_attempts=2),

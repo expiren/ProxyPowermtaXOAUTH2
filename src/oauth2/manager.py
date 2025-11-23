@@ -91,15 +91,23 @@ class OAuth2Manager:
 
         return None
 
+    async def _get_or_create_lock(self, email: str) -> asyncio.Lock:
+        """Get or create per-email lock (lazily initialized)"""
+        # ✅ FIX Issue #7: Reduce _dict_lock contention
+        # Only acquire _dict_lock if lock doesn't exist yet
+        if email not in self.cache_locks:
+            async with self._dict_lock:
+                # Double-check after acquiring lock
+                if email not in self.cache_locks:
+                    self.cache_locks[email] = asyncio.Lock()
+        return self.cache_locks[email]
+
     async def _get_cached_token(self, email: str) -> Optional[TokenCache]:
         """Get cached token if valid"""
         # Get or create per-email lock
-        if email not in self.cache_locks:
-            async with self._dict_lock:
-                if email not in self.cache_locks:
-                    self.cache_locks[email] = asyncio.Lock()
+        lock = await self._get_or_create_lock(email)
 
-        async with self.cache_locks[email]:
+        async with lock:
             cached = self.token_cache.get(email)
             if cached and cached.is_valid():
                 return cached
@@ -108,12 +116,9 @@ class OAuth2Manager:
     async def _cache_token(self, email: str, token: OAuthToken):
         """Cache token"""
         # Get or create per-email lock
-        if email not in self.cache_locks:
-            async with self._dict_lock:
-                if email not in self.cache_locks:
-                    self.cache_locks[email] = asyncio.Lock()
+        lock = await self._get_or_create_lock(email)
 
-        async with self.cache_locks[email]:
+        async with lock:
             self.token_cache[email] = TokenCache(token=token)
             logger.debug(f"[OAuth2Manager] Cached token for {email}")
 

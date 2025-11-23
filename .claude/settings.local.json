@@ -21,7 +21,8 @@
       "Bash(netstat:*)",
       "Bash(git init:*)",
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(del nul 2)"
     ],
     "deny": [],
     "ask": []

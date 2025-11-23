@@ -31,11 +31,28 @@
       "description": "Gmail (smtp.gmail.com:587) settings",
 
       "connection_pool": {
+        "_comment_pool": "Core pool settings",
         "max_connections_per_account": 40,
         "max_messages_per_connection": 50,
         "connection_max_age_seconds": 600,
         "connection_idle_timeout_seconds": 120,
-        "connection_acquire_timeout_seconds": 5
+        "connection_acquire_timeout_seconds": 5,
+        "_comment_adaptive": "Adaptive pre-warming - scales with actual traffic patterns",
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_comment": "NEW: Only pre-warm accounts that sent >threshold messages in last hour. Inactive accounts get 0 connections (saves resources). During bursts, dynamic creation handles overflow.",
+        "prewarm_min_connections": 1,
+        "_min_comment": "Minimum connections to pre-warm for active accounts (1-2 typical)",
+        "prewarm_max_connections": 10,
+        "_max_comment": "Maximum connections to pre-warm per account (1-10 typical, 10-20 for high-volume)",
+        "prewarm_min_message_threshold": 100,
+        "_threshold_comment": "Only pre-warm accounts that sent >100 messages in last hour. Prevents wasting resources on inactive accounts.",
+        "prewarm_messages_per_connection": 10,
+        "_msg_per_conn_comment": "Tuning parameter: scale connection pool based on N messages per connection. Lower (5) = more connections = higher throughput/resource. Higher (20) = fewer connections = lower resource/throughput. Default 10 (balanced).",
+        "prewarm_concurrent_tasks": 100,
+        "_concurrent_comment": "Concurrent connection creations at startup (can be higher, happens once). Prevents memory spike from too many concurrent tasks.",
+        "idle_connection_reuse_timeout": 120,
+        "_idle_comment": "Connection idle timeout before considering it dead and creating new one. Detects and replaces stale connections on-demand (no background task).",
+        "_deprecated_comment": "Removed: prewarm_percentage, periodic_rewarm_enabled, periodic_rewarm_interval_seconds, rewarm_concurrent_tasks (replaced by lazy refresh + adaptive sizing)"
       },
 
       "rate_limiting": {
@@ -64,11 +81,28 @@
       "description": "Outlook (smtp.office365.com:587) settings",
 
       "connection_pool": {
+        "_comment_pool": "Core pool settings",
         "max_connections_per_account": 30,
         "max_messages_per_connection": 40,
         "connection_max_age_seconds": 300,
         "connection_idle_timeout_seconds": 60,
-        "connection_acquire_timeout_seconds": 5
+        "connection_acquire_timeout_seconds": 5,
+        "_comment_adaptive": "Adaptive pre-warming - scales with actual traffic patterns",
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_comment": "NEW: Only pre-warm accounts that sent >threshold messages in last hour. Inactive accounts get 0 connections (saves resources). During bursts, dynamic creation handles overflow.",
+        "prewarm_min_connections": 1,
+        "_min_comment": "Minimum connections to pre-warm for active accounts (1-2 typical)",
+        "prewarm_max_connections": 8,
+        "_max_comment": "Maximum connections to pre-warm per account (lower for Outlook due to stricter limits)",
+        "prewarm_min_message_threshold": 100,
+        "_threshold_comment": "Only pre-warm accounts that sent >100 messages in last hour. Prevents wasting resources on inactive accounts.",
+        "prewarm_messages_per_connection": 10,
+        "_msg_per_conn_comment": "Tuning parameter: scale connection pool based on N messages per connection. Lower (5) = more connections = higher throughput/resource. Higher (20) = fewer connections = lower resource/throughput. Default 10 (balanced).",
+        "prewarm_concurrent_tasks": 100,
+        "_concurrent_comment": "Concurrent connection creations at startup (can be higher, happens once). Prevents memory spike from too many concurrent tasks.",
+        "idle_connection_reuse_timeout": 120,
+        "_idle_comment": "Connection idle timeout before considering it dead and creating new one. Detects and replaces stale connections on-demand (no background task).",
+        "_deprecated_comment": "Removed: prewarm_percentage, periodic_rewarm_enabled, periodic_rewarm_interval_seconds, rewarm_concurrent_tasks (replaced by lazy refresh + adaptive sizing)"
       },
 
       "rate_limiting": {
@@ -97,11 +131,28 @@
       "description": "Default settings for unknown providers",
 
       "connection_pool": {
+        "_comment_pool": "Core pool settings",
         "max_connections_per_account": 30,
         "max_messages_per_connection": 50,
         "connection_max_age_seconds": 300,
         "connection_idle_timeout_seconds": 60,
-        "connection_acquire_timeout_seconds": 5
+        "connection_acquire_timeout_seconds": 5,
+        "_comment_adaptive": "Adaptive pre-warming - scales with actual traffic patterns",
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_comment": "NEW: Only pre-warm accounts that sent >threshold messages in last hour. Inactive accounts get 0 connections (saves resources). During bursts, dynamic creation handles overflow.",
+        "prewarm_min_connections": 1,
+        "_min_comment": "Minimum connections to pre-warm for active accounts (1-2 typical)",
+        "prewarm_max_connections": 8,
+        "_max_comment": "Maximum connections to pre-warm per account (1-10 typical, 10-20 for high-volume)",
+        "prewarm_min_message_threshold": 100,
+        "_threshold_comment": "Only pre-warm accounts that sent >100 messages in last hour. Prevents wasting resources on inactive accounts.",
+        "prewarm_messages_per_connection": 10,
+        "_msg_per_conn_comment": "Tuning parameter: scale connection pool based on N messages per connection. Lower (5) = more connections = higher throughput/resource. Higher (20) = fewer connections = lower resource/throughput. Default 10 (balanced).",
+        "prewarm_concurrent_tasks": 100,
+        "_concurrent_comment": "Concurrent connection creations at startup (can be higher, happens once). Prevents memory spike from too many concurrent tasks.",
+        "idle_connection_reuse_timeout": 120,
+        "_idle_comment": "Connection idle timeout before considering it dead and creating new one. Detects and replaces stale connections on-demand (no background task).",
+        "_deprecated_comment": "Removed: prewarm_percentage, periodic_rewarm_enabled, periodic_rewarm_interval_seconds, rewarm_concurrent_tasks (replaced by lazy refresh + adaptive sizing)"
       },
 
       "rate_limiting": {

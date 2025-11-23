@@ -97,10 +97,11 @@ class AccountManager:
                         if new_account.refresh_token == old_account.refresh_token:
                             new_account.token = old_account.token
 
-                        # ✅ FIX: Preserve lock to prevent lock separation
-                        # In-flight requests hold references to old account with old lock
-                        # New requests get new account - must use SAME lock for concurrency
-                        new_account.lock = old_account.lock
+                        # ✅ FIX Issue #9: Create new lock for reloaded account
+                        # Don't reuse old lock - prevents deadlock if old requests still hold lock
+                        # After reload, new requests will use new_account with fresh lock
+                        # In-flight requests on old_account continue with old lock until completion
+                        new_account.lock = asyncio.Lock()
 
                         # ✅ FIX: Preserve runtime counters
                         # Prevents state loss and inaccurate metrics after hot-reload
@@ -108,9 +109,10 @@ class AccountManager:
                         new_account.concurrent_messages = old_account.concurrent_messages
                         new_account.active_connections = old_account.active_connections
 
-                # Clear cache BEFORE replacing dicts to prevent race condition
-                # This ensures lookups during replacement will use the new dict instead of stale cache
-                self.email_cache.clear()
+                # ✅ FIX: Don't clear cache - keep cached tokens from old accounts
+                # New requests will use cached tokens immediately without API calls
+                # Caller will refresh and cache new tokens after reload completes
+                # This avoids orphaning cached tokens and reduces latency after reload
                 self.accounts = accounts
                 self.accounts_by_id = {acc.account_id: acc for acc in accounts.values()}
 

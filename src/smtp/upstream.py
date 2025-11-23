@@ -26,10 +26,13 @@ class UpstreamRelay:
         connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
         connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
         rate_limiter = None,  # ✅ Optional RateLimiter for per-account rate limiting
-        smtp_config: Optional['SMTPConfig'] = None  # ✅ SMTP config for IP binding
+        smtp_config: Optional['SMTPConfig'] = None,  # ✅ SMTP config for IP binding
+        pool_config = None,  # ✅ NEW: ConnectionPoolConfig for prewarm settings
+        account_manager = None  # ✅ NEW: AccountManager for periodic rewarm
     ):
         self.oauth_manager = oauth_manager
         self.rate_limiter = rate_limiter  # ✅ Store rate limiter
+        self.account_manager = account_manager  # ✅ NEW: Store account_manager for rewarm loop
 
         # Create SMTP connection pool (fully async, no thread pool needed!)
         self.connection_pool = SMTPConnectionPool(
@@ -37,11 +40,13 @@ class UpstreamRelay:
             max_messages_per_connection=max_messages_per_connection,
             connection_max_age=connection_max_age,  # ✅ From config
             connection_idle_timeout=connection_idle_timeout,  # ✅ From config
-            smtp_config=smtp_config  # ✅ Pass SMTP config for IP binding
+            smtp_config=smtp_config,  # ✅ Pass SMTP config for IP binding
+            pool_config=pool_config  # ✅ NEW: Pass pool config for prewarm settings
         )
 
         # Start cleanup task
         self.cleanup_task = None
+        # REMOVED: rewarm_task (periodic re-warming replaced by lazy refresh)
 
         logger.info(
             f"[UpstreamRelay] Initialized with connection pooling "
@@ -56,6 +61,12 @@ class UpstreamRelay:
         # Start connection cleanup task
         self.cleanup_task = asyncio.create_task(self.connection_pool.cleanup_idle_connections())
         logger.info("[UpstreamRelay] Started connection pool cleanup task")
+
+    # REMOVED: start_periodic_rewarm() method
+    # Lazy connection refresh replaces periodic re-warming:
+    # - When acquire() finds idle connection (>idle_timeout seconds)
+    # - Creates new connection on-demand (not in background task)
+    # - No background overhead, only when needed for actual messages
 
     async def send_message(
         self,
@@ -216,14 +227,22 @@ class UpstreamRelay:
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
             return (False, 450, "4.4.2 Internal error")
 
+    # REMOVED: _periodic_rewarm_loop() method
+    # Replaced by lazy connection refresh in acquire():
+    # - On connection idle timeout detection, create new connection on-demand
+    # - No background task overhead, only when needed
+
     async def shutdown(self):
         """Shutdown relay and cleanup resources"""
+        # Cancel cleanup task
         if self.cleanup_task:
             self.cleanup_task.cancel()
             try:
                 await self.cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        # REMOVED: rewarm_task cancellation (periodic rewarm no longer used)
 
         await self.connection_pool.close_all()
         logger.info("[UpstreamRelay] Shutdown complete")
