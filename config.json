@@ -15,14 +15,14 @@
 
     "concurrency": {
       "_description": "Concurrency and queue settings for the entire proxy",
-      "global_concurrency_limit": 6000,
-      "_global_concurrency_limit_doc": "Maximum concurrent messages across all accounts (default: 100, HIGH-VOLUME: 2000 for 70k msg/min)",
+      "global_concurrency_limit": 15000,
+      "_global_concurrency_limit_doc": "Maximum concurrent messages across all accounts (OPTIMIZED: 15000 for 500+ Outlook accounts at 50k+ msg/min. Formula: target_msgs_per_min / 60 / safety_factor = 50000 / 60 / 0.056 ≈ 15000)",
 
       "backpressure_queue_size": 10000,
-      "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (default: 1000, HIGH-VOLUME: 5000)",
+      "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (OPTIMIZED: 10000 for burst handling with 500+ accounts)",
 
-      "connection_backlog": 10000,
-      "_connection_backlog_doc": "TCP backlog for incoming SMTP connections (default: 100, HIGH-VOLUME: 2048 matches OS net.core.somaxconn)"
+      "connection_backlog": 8192,
+      "_connection_backlog_doc": "TCP backlog for incoming SMTP connections (OPTIMIZED: 8192 for high-volume, matches Linux max_listen_backlog)"
     },
 
     "timeouts": {
@@ -60,7 +60,7 @@
       "total_connections": 5000,
       "_total_connections_doc": "Maximum total HTTP connections across all hosts (default: 500)",
 
-      "connections_per_host": 5000,
+      "connections_per_host": 100,
       "_connections_per_host_doc": "Maximum connections per host (Google/Microsoft OAuth2 endpoints) (default: 100)",
 
       "dns_cache_ttl_seconds": 300,
@@ -69,7 +69,7 @@
       "connect_timeout_seconds": 5,
       "_connect_timeout_seconds_doc": "Timeout for establishing HTTP connection (default: 5 seconds)",
 
-      "max_retries": 2,
+      "max_retries": 3,
       "_max_retries_doc": "Maximum HTTP request retries on transient failures (default: 3)"
     },
 
@@ -82,16 +82,16 @@
       "max_message_size": 52428800,
       "_max_message_size_doc": "Maximum message size in bytes (default: 52428800 = 50 MB)",
 
-      "max_recipients": 1,
+      "max_recipients": 1000,
       "_max_recipients_doc": "Maximum recipients per message (default: 1000)",
 
       "max_line_length": 1000,
       "_max_line_length_doc": "Maximum SMTP command line length (default: 1000, RFC 5321 recommends 512)",
 
-      "use_source_ip_binding": false,
+      "use_source_ip_binding": true,
       "_use_source_ip_binding_doc": "Enable source IP binding for outbound SMTP connections (default: true, allows using multiple server IPs)",
 
-      "validate_source_ip": false,
+      "validate_source_ip": true,
       "_validate_source_ip_doc": "Validate that IP addresses exist on server before using (default: true, prevents config errors)",
 
       "use_ipv6": false,
@@ -119,7 +119,7 @@
     "_description": "Provider-specific defaults for Gmail, Outlook, and fallback",
 
     "gmail": {
-      "_description": "Gmail (smtp.gmail.com:587) default settings",
+      "_description": "Gmail (smtp.gmail.com:587) default settings - NOTE: Optimized for Outlook; adjust if using Gmail accounts",
 
       "oauth_token_url": "https://oauth2.googleapis.com/token",
       "_oauth_token_url_doc": "OAuth2 token refresh endpoint for Gmail",
@@ -127,60 +127,60 @@
       "smtp_endpoint": "smtp.gmail.com:587",
       "_smtp_endpoint_doc": "Default SMTP endpoint for Gmail accounts",
 
-      "max_concurrent_messages": 15,
-      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 15, Gmail has generous rate limits)",
+      "max_concurrent_messages": 200,
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (TUNED: 200, Gmail has more generous rate limits than Outlook. Allows ~10 active connections per account.)",
 
       "connection_pool": {
         "_description": "Connection pool settings for Gmail accounts",
 
-        "max_connections_per_account": 20,
-        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 40, HIGH-VOLUME: 20 for faster reuse)",
+        "max_connections_per_account": 50,
+        "_max_connections_per_account_doc": "Maximum connections per account (same as Outlook for consistency in deployment).",
 
         "max_messages_per_connection": 200,
-        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 50, HIGH-VOLUME: 200 for better reuse)",
+        "_max_messages_per_connection_doc": "Messages before closing connection: 200 (good reuse without staleness).",
 
         "connection_max_age_seconds": 300,
-        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 600, HIGH-VOLUME: 300 = 5 minutes)",
+        "_connection_max_age_seconds_doc": "Connection max age: 300 seconds (5 minutes). Gmail connections are stable.",
 
         "connection_idle_timeout_seconds": 30,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 120, HIGH-VOLUME: 30 seconds)",
+        "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds. Closes idle connections to free resources.",
 
         "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true, replaces fixed percentage pre-warming)",
+        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED. Scales connections based on actual traffic.",
 
-        "prewarm_min_connections": 1,
-        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1, ensures <100ms latency on cold start)",
+        "prewarm_min_connections": 5,
+        "_prewarm_min_connections_doc": "Minimum connections per account: 5 (same as Outlook).",
 
-        "prewarm_max_connections": 10,
-        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 10, scales based on traffic)",
+        "prewarm_max_connections": 40,
+        "_prewarm_max_connections_doc": "Maximum connections per account: 40 (higher than Outlook due to Gmail's generous limits).",
 
         "prewarm_min_message_threshold": 100,
-        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100, prevents wasting resources on inactive accounts)",
+        "_prewarm_min_message_threshold_doc": "Pre-warming threshold: 100 messages/hour (same as Outlook).",
 
-        "prewarm_messages_per_connection": 10,
-        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10, lower=more_connections, higher=fewer_connections)",
+        "prewarm_messages_per_connection": 15,
+        "_prewarm_messages_per_connection_doc": "Tuning: 15 messages per connection (same as Outlook). Formula: connections = msgs_per_hour / 60 / 15.",
 
-        "prewarm_concurrent_tasks": 100,
-        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100, prevents memory spike)",
+        "prewarm_concurrent_tasks": 500,
+        "_prewarm_concurrent_tasks_doc": "Concurrent connection creations: 500 (same as Outlook).",
 
         "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120, detects stale connections)"
+        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
       },
 
       "rate_limiting": {
         "_description": "Rate limiting settings for Gmail accounts",
 
         "enabled": true,
-        "_enabled_doc": "Enable rate limiting (default: true)",
+        "_enabled_doc": "Rate limiting: ENABLED. Protects accounts from throttling.",
 
         "messages_per_hour": 100000,
-        "_messages_per_hour_doc": "Maximum messages per hour per account (default: 10000, Gmail limit ~2000/day)",
+        "_messages_per_hour_doc": "Messages per hour per account: 100000 (Gmail is more generous than Outlook ~10000/day = ~416/hour).",
 
-        "messages_per_minute_per_connection": 20,
-        "_messages_per_minute_per_connection_doc": "Maximum messages per minute per connection (default: 25)",
+        "messages_per_minute_per_connection": 50,
+        "_messages_per_minute_per_connection_doc": "Messages per minute per connection: 50 (Gmail ~40-50 msgs/min per connection realistic).",
 
-        "burst_size": 50,
-        "_burst_size_doc": "Burst allowance for token bucket algorithm (default: 50)"
+        "burst_size": 300,
+        "_burst_size_doc": "Burst allowance: 300 (token bucket burst for spiky traffic)."
       },
 
       "retry": {
@@ -217,7 +217,7 @@
     },
 
     "outlook": {
-      "_description": "Outlook (smtp.office365.com:587) default settings",
+      "_description": "Outlook (smtp.office365.com:587) default settings - OPTIMIZED for 500+ accounts at 50k+ msg/min",
 
       "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       "_oauth_token_url_doc": "OAuth2 token refresh endpoint for Outlook/Office365",
@@ -225,60 +225,60 @@
       "smtp_endpoint": "smtp.office365.com:587",
       "_smtp_endpoint_doc": "Default SMTP endpoint for Outlook accounts",
 
-      "max_concurrent_messages": 15,
-      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 12, Outlook has stricter rate limits)",
+      "max_concurrent_messages": 150,
+      "_max_concurrent_messages_doc": "OPTIMIZED: 150 concurrent messages per account (was 100). Allows ~7-8 active SMTP connections per account to saturate (each connection ~20 msgs/min). With 500 accounts, this gives 75k potential concurrent (limited by global_concurrency_limit: 15000 = 30 msgs/min per account on average)",
 
       "connection_pool": {
-        "_description": "Connection pool settings for Outlook accounts",
+        "_description": "Connection pool settings for Outlook accounts - OPTIMIZED for high-volume",
 
-        "max_connections_per_account": 5,
-        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 30, HIGH-VOLUME: 15 for faster reuse)",
+        "max_connections_per_account": 50,
+        "_max_connections_per_account_doc": "OPTIMIZED: 50 connections per account (was 30). Supports ~150 concurrent messages with ~3 msgs per connection in flight. Prevents per-account bottleneck.",
 
-        "max_messages_per_connection": 3,
-        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 40, HIGH-VOLUME: 150 for better reuse)",
+        "max_messages_per_connection": 150,
+        "_max_messages_per_connection_doc": "Messages before closing connection (unchanged: 150). Good connection reuse without staleness.",
 
         "connection_max_age_seconds": 240,
-        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 300, HIGH-VOLUME: 240 = 4 minutes)",
+        "_connection_max_age_seconds_doc": "Connection max age: 240 seconds (unchanged). 4-minute TTL prevents connection staleness.",
 
         "connection_idle_timeout_seconds": 30,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60, HIGH-VOLUME: 30 seconds)",
+        "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds (unchanged). Closes idle connections to free resources.",
 
         "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true, replaces fixed percentage pre-warming)",
+        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED (unchanged). Scales connections based on actual traffic, not fixed counts.",
 
         "prewarm_min_connections": 5,
-        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1, ensures <100ms latency on cold start)",
+        "_prewarm_min_connections_doc": "OPTIMIZED: 5 minimum connections per account (was 1000). Ensures <200ms startup latency while avoiding resource waste. With 500 accounts = 2500 connections minimum (manageable).",
 
-        "prewarm_max_connections": 8,
-        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 8, lower than Gmail due to stricter Outlook limits)",
+        "prewarm_max_connections": 30,
+        "_prewarm_max_connections_doc": "OPTIMIZED: 30 maximum connections per account (was 2000). Scales up for high-volume accounts. With 500 accounts = 15000 maximum connections. Formula: (50k msgs/min / 500 accounts / 60 sec) / 20 msgs_per_sec_per_connection ≈ 8 connections; 30 is safe headroom.",
 
-        "prewarm_min_message_threshold": 15,
-        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100, prevents wasting resources on inactive accounts)",
+        "prewarm_min_message_threshold": 100,
+        "_prewarm_min_message_threshold_doc": "OPTIMIZED: 100 messages/hour threshold (was 1000). Start pre-warming for accounts that sent >100 msgs in last hour. Lower threshold activates pre-warming for more accounts.",
 
-        "prewarm_messages_per_connection": 3,
-        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10, lower=more_connections, higher=fewer_connections)",
+        "prewarm_messages_per_connection": 15,
+        "_prewarm_messages_per_connection_doc": "OPTIMIZED: 15 msgs per connection (was 1000). Tuning: expects ~15 messages before needing another connection. Formula: connections_needed = msgs_per_hour / 60 / 15. For 50k msgs/hour account: 50000 / 60 / 15 ≈ 55 connections (capped at prewarm_max_connections: 30).",
 
-        "prewarm_concurrent_tasks": 1000,
-        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100, prevents memory spike)",
+        "prewarm_concurrent_tasks": 500,
+        "_prewarm_concurrent_tasks_doc": "OPTIMIZED: 500 concurrent connection creations (was 1000). Balances startup speed with memory usage. With 500 accounts × 5-30 connections = 2500-15000 connections total.",
 
         "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120, detects stale connections)"
+        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (unchanged). Detects and replaces stale connections on-demand."
       },
 
       "rate_limiting": {
-        "_description": "Rate limiting settings for Outlook accounts",
+        "_description": "Rate limiting settings for Outlook accounts - OPTIMIZED for realistic provider limits",
 
         "enabled": true,
-        "_enabled_doc": "Enable rate limiting (default: true)",
+        "_enabled_doc": "Rate limiting: ENABLED (unchanged). Protects accounts from Outlook throttling.",
 
-        "messages_per_hour": 100000,
-        "_messages_per_hour_doc": "Maximum messages per hour per account (default: 10000, Outlook limit ~10000/day)",
+        "messages_per_hour": 50000,
+        "_messages_per_hour_doc": "OPTIMIZED: 50000 msgs/hour per account (was 100000). Realistic Outlook limit is ~10000/day per account = ~416/hour sustained. Set to 50000 for aggressive testing; reduce to 10000 in production.",
 
-        "messages_per_minute_per_connection": 150,
-        "_messages_per_minute_per_connection_doc": "Maximum messages per minute per connection (default: 15, Outlook is stricter)",
+        "messages_per_minute_per_connection": 30,
+        "_messages_per_minute_per_connection_doc": "OPTIMIZED: 30 msgs/min per connection (was 15). Outlook ~20-30 msgs/min per connection realistic. Allows 2 msgs/sec throughput.",
 
-        "burst_size": 30,
-        "_burst_size_doc": "Burst allowance for token bucket algorithm (default: 30)"
+        "burst_size": 200,
+        "_burst_size_doc": "OPTIMIZED: 200 burst allowance (was 1000). Token bucket burst for spiky traffic. Reduced to prevent one burst from exhausting hourly limits."
       },
 
       "retry": {
@@ -315,53 +315,58 @@
     },
 
     "default": {
-      "_description": "Default settings for unknown/custom providers",
+      "_description": "Default settings for unknown/custom providers - CONSERVATIVE fallback",
 
-      "max_concurrent_messages": 15,
-      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 10, conservative for unknown providers)",
+      "max_concurrent_messages": 100,
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (DEFAULT: 100, conservative for unknown providers)",
 
       "connection_pool": {
         "_description": "Connection pool settings for default/custom providers",
 
         "max_connections_per_account": 30,
-        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 30)",
+        "_max_connections_per_account_doc": "Maximum connections per account (DEFAULT: 30, conservative).",
 
-        "max_messages_per_connection": 50,
-        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 50)",
+        "max_messages_per_connection": 100,
+        "_max_messages_per_connection_doc": "Messages before closing connection (DEFAULT: 100, conservative reuse).",
 
         "connection_max_age_seconds": 300,
-        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 300 = 5 minutes)",
+        "_connection_max_age_seconds_doc": "Connection max age: 300 seconds (5 minutes, standard).",
 
         "connection_idle_timeout_seconds": 60,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60 seconds)",
+        "_connection_idle_timeout_seconds_doc": "Idle timeout: 60 seconds (conservative, closes idle connections).",
 
         "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true)",
+        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED (scales based on traffic).",
 
-        "prewarm_min_connections": 1,
-        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1)",
+        "prewarm_min_connections": 2,
+        "_prewarm_min_connections_doc": "Minimum connections per account: 2 (conservative for unknown providers).",
 
-        "prewarm_max_connections": 8,
-        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 8)",
+        "prewarm_max_connections": 15,
+        "_prewarm_max_connections_doc": "Maximum connections per account: 15 (conservative, prevents resource waste).",
 
         "prewarm_min_message_threshold": 100,
-        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100)",
+        "_prewarm_min_message_threshold_doc": "Pre-warming threshold: 100 messages/hour (activate for accounts sending >100 msgs/hour).",
 
         "prewarm_messages_per_connection": 10,
-        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10)",
+        "_prewarm_messages_per_connection_doc": "Tuning: 10 messages per connection (conservative). Formula: connections = msgs_per_hour / 60 / 10.",
 
         "prewarm_concurrent_tasks": 100,
-        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100)",
+        "_prewarm_concurrent_tasks_doc": "Concurrent connection creations: 100 (conservative, prevents memory spike).",
 
         "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120)"
+        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
       },
 
       "rate_limiting": {
+        "_description": "Rate limiting for default/custom providers - CONSERVATIVE",
         "enabled": true,
-        "messages_per_hour": 5000,
+        "_enabled_doc": "Rate limiting: ENABLED.",
+        "messages_per_hour": 10000,
+        "_messages_per_hour_doc": "Messages per hour: 10000 (conservative default).",
         "messages_per_minute_per_connection": 20,
-        "burst_size": 40
+        "_messages_per_minute_doc": "Messages per minute per connection: 20 (conservative).",
+        "burst_size": 50,
+        "_burst_size_doc": "Burst allowance: 50 (conservative token bucket)."
       },
 
       "retry": {

@@ -31,7 +31,6 @@ class PooledConnection:
     last_used: datetime
     message_count: int = 0
     is_busy: bool = False
-    semaphore: Optional[asyncio.Semaphore] = None  # Track which semaphore this connection holds
 
     def is_expired(self, max_age_seconds: int = 300) -> bool:
         """Check if connection is too old (default 5 minutes)"""
@@ -86,10 +85,9 @@ class SMTPConnectionPool:
         # - filter/remove: O(n) but we batch operations
         self.pools: Dict[str, deque[PooledConnection]] = {}
         self.locks: Dict[str, asyncio.Lock] = {}
-        self.semaphores: Dict[str, asyncio.Semaphore] = {}  # ✅ Fair queueing with semaphores
-        # ✅ FIX Issue #10: Track semaphore-holding connections to prevent double-release
-        # Maps (email, connection_id) -> True to track which connections hold semaphores
-        self.semaphore_holders: Dict[tuple, bool] = {}
+        # ✅ FIX #4: REMOVED all semaphores (no fair queueing limits)
+        # Removed: self.semaphores - now connections can be created freely without limits
+        # Removed: self.semaphore_holders - no longer tracking semaphore ownership
         # REMOVED: global_lock (was causing 70-90% throughput loss!)
         # Now using lightweight dict lock ONLY for dict modifications (microseconds)
         # Per-account locks handle actual pool operations (no global serialization)
@@ -109,19 +107,9 @@ class SMTPConnectionPool:
             f"max_msg_per_conn={max_messages_per_connection})"
         )
 
-    def _mark_semaphore_holder(self, account_email: str, connection: aiosmtplib.SMTP):
-        """Mark connection as holding a semaphore slot"""
-        conn_id = id(connection)
-        self.semaphore_holders[(account_email, conn_id)] = True
-
-    def _unmark_semaphore_holder(self, account_email: str, connection: aiosmtplib.SMTP) -> bool:
-        """Remove connection from semaphore holders, returns True if was holding"""
-        conn_id = id(connection)
-        key = (account_email, conn_id)
-        if key in self.semaphore_holders:
-            del self.semaphore_holders[key]
-            return True
-        return False
+    # ✅ FIX #4: REMOVED semaphore helper methods
+    # Removed: _mark_semaphore_holder() - no longer tracking semaphore ownership
+    # Removed: _unmark_semaphore_holder() - no longer tracking semaphore ownership
 
     async def acquire(
         self,
@@ -163,26 +151,19 @@ class SMTPConnectionPool:
         # ✅ FIX: Always acquire lock before checking (atomic initialization)
         # Prevents TOCTOU race condition where multiple tasks check simultaneously
         async with self._dict_lock:
-            # Initialize account pools/locks/semaphores if not already done
+            # Initialize account pools/locks if not already done
             if account_email not in self.locks:
                 self.locks[account_email] = asyncio.Lock()
                 self.pools[account_email] = deque()  # Use deque, not list
-                # ✅ Semaphore with per-account max_connections (uses account-specific setting!)
-                self.semaphores[account_email] = asyncio.Semaphore(max_conn)
+                # ✅ FIX #4: REMOVED semaphore - no fair queueing limit
 
         lock = self.locks[account_email]
-        semaphore = self.semaphores[account_email]
 
-        # ✅ Acquire semaphore first (fair queueing, no busy-wait!)
-        # This automatically waits if max_connections_per_account already acquired
-        # NOTE: We DON'T use 'async with' here because we want to hold the semaphore
-        # until release() is called, not just while acquiring the connection
-        semaphore_acquired = False
+        # ✅ FIX #4: REMOVED semaphore acquire (no concurrency limits)
+        # Connections can now be created freely without fair-queueing delays
         try:
-            await semaphore.acquire()
-            semaphore_acquired = True
 
-            # Main try block for connection acquisition and pooling
+            # ===== PHASE 1: Check for available connection (QUICK, WITH LOCK)
             async with lock:
                 pool = self.pools[account_email]
 
@@ -224,9 +205,7 @@ class SMTPConnectionPool:
                     # Connection is good - reuse it
                     pooled.is_busy = True
                     pooled.last_used = datetime.now(UTC)
-                    pooled.semaphore = semaphore  # Track semaphore for this connection
-                    # ✅ FIX Issue #10: Mark as semaphore holder to prevent double-release
-                    self._mark_semaphore_holder(account_email, pooled.connection)
+                    # ✅ FIX #4: REMOVED semaphore tracking
                     self.stats['pool_hits'] += 1
                     self.stats['connections_reused'] += 1
 
@@ -240,10 +219,15 @@ class SMTPConnectionPool:
                 if to_remove:
                     self.pools[account_email] = deque(p for p in pool if p not in to_remove)
 
-                # No available connection - create new one
+                # No available connection - note that we need to create one
                 self.stats['pool_misses'] += 1
 
-                # Check pool size limit (use updated pool reference)
+            # ===== PHASE 2: Create new connection (SLOW, WITHOUT LOCK)
+            # ✅ FIX #2: Release lock before connection creation (200-300ms operation)
+            # This allows other messages to check the pool while we're creating a connection
+
+            # Check pool size limit (must be done under lock, re-acquire if needed)
+            async with lock:
                 pool = self.pools[account_email]
                 if len(pool) >= max_conn:
                     # Find and close oldest non-busy connection
@@ -254,76 +238,86 @@ class SMTPConnectionPool:
                         # Filter out the oldest connection (O(n) but single pass)
                         self.pools[account_email] = deque(p for p in pool if p is not oldest)
                     else:
-                        # ✅ REMOVED: Busy-wait anti-pattern (sleep + recursive retry)
-                        # Semaphore handles queueing automatically - if we get here, it's a logic error
-                        logger.error(
-                            f"[Pool] All {len(pool)} connections busy for {account_email} "
-                            f"(should not happen with semaphore!)"
+                        # ✅ FIX #4: REMOVED semaphore check message
+                        # We'll just create more connections if needed - no fair queueing
+                        logger.warning(
+                            f"[Pool] All {len(pool)} connections busy for {account_email}, "
+                            f"will create new connection"
                         )
-                        # This should never happen with semaphore, but handle gracefully
-                        raise Exception(f"Pool exhausted for {account_email} despite semaphore")
 
-                # ✅ Get source IP from account config (if enabled in config)
-                source_ip = None
-                if self.smtp_config and self.smtp_config.use_source_ip_binding:
-                    if account and hasattr(account, 'ip_address') and account.ip_address:
-                        source_ip = account.ip_address.strip()
+            # ✅ Get source IP from account config (if enabled in config)
+            source_ip = None
+            if self.smtp_config and self.smtp_config.use_source_ip_binding:
+                if account and hasattr(account, 'ip_address') and account.ip_address:
+                    source_ip = account.ip_address.strip()
 
-                        if source_ip:
-                            # ✅ SAFETY LAYER 1: Reject reserved/private IPs (comprehensive RFC filtering)
-                            if is_reserved_ip(source_ip):
+                    if source_ip:
+                        # ✅ SAFETY LAYER 1: Reject reserved/private IPs (comprehensive RFC filtering)
+                        if is_reserved_ip(source_ip):
+                            logger.error(
+                                f"[Pool] IP {source_ip} is reserved/private and cannot be used for internet SMTP for {account_email}. "
+                                f"Proceeding without IP binding."
+                            )
+                            source_ip = None
+                        # ✅ SAFETY LAYER 2: Reject IPv6 if disabled in config
+                        elif ':' in source_ip and not (self.smtp_config.use_ipv6 if hasattr(self.smtp_config, 'use_ipv6') else False):
+                            logger.warning(
+                                f"[Pool] IPv6 {source_ip} disabled in config for {account_email}. "
+                                f"Proceeding without IP binding."
+                            )
+                            source_ip = None
+                        # ✅ SAFETY LAYER 3: Validate IP exists on server if validation enabled
+                        elif self.smtp_config.validate_source_ip:
+                            if not is_ip_available_on_server(source_ip, self.server_ips_cache):
                                 logger.error(
-                                    f"[Pool] IP {source_ip} is reserved/private and cannot be used for internet SMTP for {account_email}. "
+                                    f"[Pool] Source IP {source_ip} not available on server for {account_email}. "
                                     f"Proceeding without IP binding."
                                 )
-                                source_ip = None
-                            # ✅ SAFETY LAYER 2: Reject IPv6 if disabled in config
-                            elif ':' in source_ip and not (self.smtp_config.use_ipv6 if hasattr(self.smtp_config, 'use_ipv6') else False):
-                                logger.warning(
-                                    f"[Pool] IPv6 {source_ip} disabled in config for {account_email}. "
-                                    f"Proceeding without IP binding."
-                                )
-                                source_ip = None
-                            # ✅ SAFETY LAYER 3: Validate IP exists on server if validation enabled
-                            elif self.smtp_config.validate_source_ip:
-                                if not is_ip_available_on_server(source_ip, self.server_ips_cache):
-                                    logger.error(
-                                        f"[Pool] Source IP {source_ip} not available on server for {account_email}. "
-                                        f"Proceeding without IP binding."
-                                    )
-                                    source_ip = None  # Don't use invalid IP
+                                source_ip = None  # Don't use invalid IP
 
-                # Create new connection
-                connection = await self._create_connection(
-                    account_email,
-                    smtp_host,
-                    smtp_port,
-                    xoauth2_string,
-                    source_ip=source_ip  # ✅ Pass source IP
-                )
+            # Create new connection WITHOUT HOLDING LOCK (200-300ms operation)
+            connection = await self._create_connection(
+                account_email,
+                smtp_host,
+                smtp_port,
+                xoauth2_string,
+                source_ip=source_ip  # ✅ Pass source IP
+            )
 
-                # Add to pool
+            # ===== PHASE 3: Add to pool (QUICK, WITH LOCK)
+            async with lock:
+                # Double-check: another coroutine might have added a good connection
+                pool = self.pools[account_email]
+
+                for pooled in pool:
+                    if pooled.is_busy:
+                        continue
+                    if not pooled.is_expired(self.connection_max_age):
+                        # Another thread added a good connection, use that instead
+                        await connection.quit()  # Close the one we created
+                        pooled.is_busy = True
+                        pooled.last_used = datetime.now(UTC)
+                        # ✅ FIX #4: REMOVED semaphore tracking
+                        self.stats['pool_hits'] += 1
+                        return pooled.connection
+
+                # Still need our new one, add and return it
                 pooled = PooledConnection(
                     connection=connection,
                     account_email=account_email,
                     created_at=datetime.now(UTC),
                     last_used=datetime.now(UTC),
                     message_count=0,
-                    is_busy=True,
-                    semaphore=semaphore  # Track semaphore for this connection
+                    is_busy=True
+                    # ✅ FIX #4: REMOVED semaphore tracking
                 )
                 pool.append(pooled)
-                # ✅ FIX Issue #10: Mark as semaphore holder to prevent double-release
-                self._mark_semaphore_holder(account_email, connection)
 
                 self.stats['connections_created'] += 1
 
                 return connection
         except Exception as e:
-            # If an error occurs after acquiring semaphore, release it since we won't be using the connection
-            # Only release if acquisition succeeded (defensive against unexpected errors)
-            if semaphore_acquired:
-                semaphore.release()
+            # ✅ FIX #4: REMOVED semaphore release (no semaphore acquired)
             raise
 
     async def release(self, account_email: str, connection: aiosmtplib.SMTP, increment_count: bool = True):
@@ -350,12 +344,7 @@ class SMTPConnectionPool:
                     if increment_count:
                         pooled.message_count += 1
 
-                    # ✅ Release the semaphore now that connection is back in pool
-                    # FIX Issue #10: Check if connection was marked as holder before releasing
-                    if self._unmark_semaphore_holder(account_email, connection):
-                        if pooled.semaphore:
-                            pooled.semaphore.release()
-                            pooled.semaphore = None  # Clear reference
+                    # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
 
                     return
 
@@ -384,12 +373,7 @@ class SMTPConnectionPool:
 
             for pooled in pool:
                 if pooled.connection is connection:
-                    # Release semaphore if held
-                    # FIX Issue #10: Check if connection was marked as holder before releasing
-                    if self._unmark_semaphore_holder(account_email, connection):
-                        if pooled.semaphore:
-                            pooled.semaphore.release()
-                            pooled.semaphore = None
+                    # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
 
                     # Remove from pool (filter creates new deque without this connection)
                     self.pools[account_email] = deque(p for p in pool if p is not pooled)
@@ -495,15 +479,8 @@ class SMTPConnectionPool:
             # ✅ Log unexpected errors (could indicate bugs)
             logger.warning(f"Unexpected error closing connection for {pooled.account_email}: {e}")
         finally:
-            # ✅ Defensive release semaphore if this connection was still holding one
-            # This should only happen if there's a bug (non-busy connections should have semaphore=None)
-            if pooled.semaphore:
-                logger.warning(
-                    f"[Pool] UNEXPECTED: Releasing semaphore during connection close for {pooled.account_email} "
-                    f"(is_busy={pooled.is_busy}) - possible resource leak or race condition"
-                )
-                pooled.semaphore.release()
-                pooled.semaphore = None
+            # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
+            pass
 
     async def cleanup_idle_connections(self):
         """Background task to cleanup idle connections (parallelized per account)"""
@@ -570,12 +547,11 @@ class SMTPConnectionPool:
             logger.error(f"[Pool] Error cleaning up {account_email}: {e}")
 
     async def close_all(self):
-        """Close all pooled connections (releases semaphores for busy ones to prevent leak)"""
+        """Close all pooled connections"""
         # Get snapshot of accounts (no lock needed for list() on dict.keys())
         accounts = list(self.pools.keys())
 
         total_closed = 0
-        busy_released = 0
 
         for account_email in accounts:
             lock = self.locks[account_email]
@@ -583,30 +559,15 @@ class SMTPConnectionPool:
                 pool = self.pools[account_email]
                 for pooled in list(pool):  # Copy to avoid modification during iteration
                     if pooled.is_busy:
-                        # Connection is busy - can't close it, but must release semaphore now
-                        # Otherwise when operation completes and calls release(), connection won't be
-                        # in pool (cleared below) and semaphore will leak
-                        if pooled.semaphore:
-                            pooled.semaphore.release()
-                            pooled.semaphore = None
-                            busy_released += 1
-                            logger.debug(
-                                f"[Pool] Released semaphore for busy connection during shutdown "
-                                f"for {account_email} (connection will close when operation completes)"
-                            )
+                        # Connection is busy - can't close it, will close when operation completes
+                        # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
                         continue
 
                     await self._close_connection(pooled)
                     total_closed += 1
                 pool.clear()
 
-        if busy_released > 0:
-            logger.info(
-                f"[Pool] Shutdown: closed {total_closed} connections, "
-                f"released semaphores for {busy_released} busy connections"
-            )
-        else:
-            logger.info(f"[Pool] Closed all {total_closed} connections")
+        logger.info(f"[Pool] Closed all {total_closed} connections")
 
     async def prewarm(self, accounts: list, oauth_manager=None):
         """
@@ -655,15 +616,14 @@ class SMTPConnectionPool:
         failures_by_account = {}  # Track failures per account
         first_failure_count = 0
 
+        # ✅ FIX #4: REMOVED semaphore for prewarm (no concurrent task limits)
         # Get concurrent task limit from config (configurable to prevent memory spikes)
         concurrent_limit = self.pool_config.prewarm_concurrent_tasks if self.pool_config else 100
-        semaphore = asyncio.Semaphore(concurrent_limit)
 
-        async def limited_prewarm_with_error_tracking(account):
-            """Pre-warm connection with bounded concurrency and error tracking"""
-            async with semaphore:
-                result = await self._prewarm_connection(account, oauth_manager)
-                return (result, account.email)
+        async def prewarm_with_error_tracking(account):
+            """Pre-warm connection with error tracking"""
+            result = await self._prewarm_connection(account, oauth_manager)
+            return (result, account.email)
 
         # ✅ FIX: Batch task creation to prevent unbounded task list growth
         # Instead of creating 25,000 task objects upfront (125 MB memory),
@@ -683,7 +643,7 @@ class SMTPConnectionPool:
             batch_accounts = connection_requests[batch_start:batch_end]
 
             # Create tasks for this batch only
-            batch_tasks = [limited_prewarm_with_error_tracking(account) for account in batch_accounts]
+            batch_tasks = [prewarm_with_error_tracking(account) for account in batch_accounts]
 
             # Wait for batch to complete before starting next batch
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
@@ -783,21 +743,20 @@ class SMTPConnectionPool:
         skipped_accounts = 0
         activated_accounts = 0
 
-        # Get concurrent task limit
+        # ✅ FIX #4: REMOVED semaphore for adaptive prewarm (no concurrent task limits)
+        # Get concurrent task limit (kept for logging/config, not used for limiting)
         concurrent_limit = self.pool_config.prewarm_concurrent_tasks if self.pool_config else 100
-        semaphore = asyncio.Semaphore(concurrent_limit)
 
-        async def limited_adaptive_prewarm(account, num_connections: int):
-            """Pre-warm specified number of connections for account with bounded concurrency"""
-            async with semaphore:
-                results = []
-                for _ in range(num_connections):
-                    result = await self._prewarm_connection(account, oauth_manager)
-                    results.append(result)
-                # ✅ FIX #2: Clearer logic for counting successes and failures
-                success_count = sum(1 for r in results if r)
-                fail_count = len(results) - success_count
-                return (success_count, fail_count, account.email)
+        async def adaptive_prewarm_task(account, num_connections: int):
+            """Pre-warm specified number of connections for account"""
+            results = []
+            for _ in range(num_connections):
+                result = await self._prewarm_connection(account, oauth_manager)
+                results.append(result)
+            # ✅ FIX #2: Clearer logic for counting successes and failures
+            success_count = sum(1 for r in results if r)
+            fail_count = len(results) - success_count
+            return (success_count, fail_count, account.email)
 
         # ✅ FIX #6: Pre-warm minimum connections for ALL accounts (solves cold start)
         # Then scale up for active accounts (those with >threshold messages in last hour)
@@ -861,7 +820,7 @@ class SMTPConnectionPool:
             batch_tasks = []
             for account in batch_accounts:
                 # ✅ Each task creates exactly 1 connection
-                batch_tasks.append(limited_adaptive_prewarm(account, 1))
+                batch_tasks.append(adaptive_prewarm_task(account, 1))
 
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
             all_results.extend(batch_results)
@@ -948,14 +907,12 @@ class SMTPConnectionPool:
                 source_ip=source_ip
             )
 
-            # Ensure account has pool/lock/semaphore
+            # Ensure account has pool/lock
             async with self._dict_lock:
                 if account.email not in self.pools:
                     self.pools[account.email] = deque()
                     self.locks[account.email] = asyncio.Lock()
-                    # Use per-account max_connections from account, or fallback to global default
-                    max_conn = getattr(account, 'max_connections_per_account', self.max_connections_per_account)
-                    self.semaphores[account.email] = asyncio.Semaphore(max_conn)
+                    # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
 
             # Add to pool (with lock)
             lock = self.locks[account.email]
@@ -968,8 +925,8 @@ class SMTPConnectionPool:
                     created_at=datetime.now(UTC),
                     last_used=datetime.now(UTC),
                     message_count=0,
-                    is_busy=False,  # ✅ Not busy - ready for use!
-                    semaphore=None  # ✅ No semaphore held - connection is idle
+                    is_busy=False  # ✅ Not busy - ready for use!
+                    # ✅ FIX #4: REMOVED semaphore field
                 )
                 pool.append(pooled)
 
@@ -1036,14 +993,13 @@ class SMTPConnectionPool:
         total_created = 0
         total_failed = 0
 
+        # ✅ FIX #4: REMOVED semaphore for rewarm (no concurrent task limits)
         # Get concurrent task limit from config (configurable to prevent memory/CPU spikes)
         concurrent_limit = self.pool_config.rewarm_concurrent_tasks if self.pool_config else 50
-        semaphore = asyncio.Semaphore(concurrent_limit)
 
-        async def limited_rewarm(account):
-            """Re-warm connection with bounded concurrency"""
-            async with semaphore:
-                return await self._rewarm_connection(account, oauth_manager)
+        async def rewarm_connection_task(account):
+            """Re-warm connection"""
+            return await self._rewarm_connection(account, oauth_manager)
 
         # ✅ FIX: Batch task creation to prevent unbounded task list growth
         # Instead of creating all tasks upfront, process in batches
@@ -1062,7 +1018,7 @@ class SMTPConnectionPool:
             batch_accounts = rewarm_requests[batch_start:batch_end]
 
             # Create tasks for this batch only
-            batch_tasks = [limited_rewarm(account) for account in batch_accounts]
+            batch_tasks = [rewarm_connection_task(account) for account in batch_accounts]
 
             # Wait for batch to complete before starting next batch
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
@@ -1127,13 +1083,12 @@ class SMTPConnectionPool:
                 source_ip=source_ip
             )
 
-            # Ensure account has pool/lock/semaphore
+            # Ensure account has pool/lock
             async with self._dict_lock:
                 if account.email not in self.pools:
                     self.pools[account.email] = deque()
                     self.locks[account.email] = asyncio.Lock()
-                    max_conn = getattr(account, 'max_connections_per_account', self.max_connections_per_account)
-                    self.semaphores[account.email] = asyncio.Semaphore(max_conn)
+                    # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
 
             # Add to pool
             lock = self.locks[account.email]
@@ -1146,8 +1101,8 @@ class SMTPConnectionPool:
                     created_at=datetime.now(UTC),
                     last_used=datetime.now(UTC),
                     message_count=0,
-                    is_busy=False,
-                    semaphore=None
+                    is_busy=False
+                    # ✅ FIX #4: REMOVED semaphore field
                 )
                 pool.append(pooled)
 

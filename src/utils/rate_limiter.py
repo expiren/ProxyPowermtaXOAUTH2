@@ -27,36 +27,31 @@ class TokenBucket:
 
     async def acquire(self, tokens: int = 1, timeout: float = 1.0) -> bool:
         """Acquire tokens, wait if necessary"""
-        # ✅ FIX: Calculate refill OUTSIDE lock to reduce lock contention
-        # Refill calculation (datetime operations) happens without holding lock
-        new_tokens = await self._calculate_refill()
-
-        # Only hold lock for actual state modification
+        # ✅ FIX #3: Consolidated single lock acquisition (was double-locking)
+        # Combine refill calculation and token consumption into one lock scope
+        # This eliminates the double-lock pattern: _calculate_refill() + acquire()
         async with self.lock:
-            # Apply calculated tokens
+            # Calculate refill (same logic as _calculate_refill, now inline)
+            now: datetime = datetime.now(UTC)
+            elapsed = (now - self.last_refill).total_seconds()
+            self.last_refill = now  # Update timestamp
+
+            # Add refilled tokens
+            new_tokens = elapsed * self.refill_rate
             self.tokens = min(float(self.capacity), self.tokens + new_tokens)
 
+            # Try to consume requested tokens
             if self.tokens >= tokens:
                 self.tokens -= tokens
                 return True
 
             return False
 
-    async def _calculate_refill(self) -> float:
-        """
-        Calculate tokens to add without holding lock.
-
-        Returns: Number of tokens to add (may be 0 if recently refilled)
-        """
-        now: datetime = datetime.now(UTC)
-        async with self.lock:
-            elapsed = (now - self.last_refill).total_seconds()
-            self.last_refill = now  # Update timestamp while holding lock
-
-        return elapsed * self.refill_rate
-
     async def _refill(self):
-        """Refill bucket based on time elapsed"""
+        """
+        ✅ FIX #3: This method is still used by check_rate_limit()
+        for non-blocking rate check. Kept for backward compatibility.
+        """
         now: datetime = datetime.now(UTC)
         elapsed = (now - self.last_refill).total_seconds()
         new_tokens = elapsed * self.refill_rate
