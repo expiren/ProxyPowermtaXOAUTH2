@@ -77,8 +77,10 @@ class SMTPProxyServer:
             account_manager=self.account_manager  # ✅ NEW: Pass account_manager for periodic rewarm
         )
 
-        # ✅ Global semaphore for backpressure
-        self.global_semaphore = asyncio.Semaphore(self.proxy_config.global_config.global_concurrency_limit)
+        # ✅ REMOVED: Global semaphore for backpressure
+        # The global semaphore was removed as a bottleneck (see FIX #1)
+        # Concurrency is now limited by connection pool and per-account limits
+        # self.global_semaphore = asyncio.Semaphore(self.proxy_config.global_config.global_concurrency_limit)
 
         # Admin HTTP server for managing accounts via API
         self.admin_server = AdminServer(
@@ -221,7 +223,7 @@ class SMTPProxyServer:
                     upstream_relay=self.upstream_relay,
                     dry_run=self.settings.dry_run,
                     global_concurrency_limit=self.settings.global_concurrency_limit,
-                    global_semaphore=self.global_semaphore,
+                    # ✅ REMOVED: global_semaphore (no longer needed after FIX #1)
                     backpressure_queue_size=self.proxy_config.global_config.backpressure_queue_size
                 )
 
