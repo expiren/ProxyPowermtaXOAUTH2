@@ -101,6 +101,15 @@ class SMTPProxyServer:
         # Initialize upstream relay with connection pool
         await self.upstream_relay.initialize()
 
+        # ✅ Pre-warm connection pool for fast startup (eliminates cold-start delays)
+        # Create 5 connections per account upfront, so first messages don't wait
+        if num_accounts > 0:
+            accounts = await self.account_manager.get_all()
+            await self.upstream_relay.connection_pool.prewarm(
+                accounts,
+                connections_per_account=5  # Create 5 connections per account
+            )
+
         logger.info(f"[SMTPProxyServer] Initialized with {num_accounts} accounts")
         return num_accounts
 
@@ -138,6 +147,14 @@ class SMTPProxyServer:
 
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
+
+            # ✅ Pre-warm connection pool after reload (for new accounts)
+            if num_accounts > 0:
+                accounts = await self.account_manager.get_all()
+                await self.upstream_relay.connection_pool.prewarm(
+                    accounts,
+                    connections_per_account=5  # Create 5 connections per account
+                )
 
             logger.info(
                 f"[SMTPProxyServer] Reload complete - {num_accounts} accounts loaded with updated provider settings"
