@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import time
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from src.accounts.models import AccountConfig
@@ -27,10 +26,13 @@ class UpstreamRelay:
         connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
         connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
         rate_limiter = None,  # ✅ Optional RateLimiter for per-account rate limiting
-        smtp_config: Optional['SMTPConfig'] = None  # ✅ SMTP config for IP binding
+        smtp_config: Optional['SMTPConfig'] = None,  # ✅ SMTP config for IP binding
+        pool_config = None,  # ✅ NEW: ConnectionPoolConfig for prewarm settings
+        account_manager = None  # ✅ NEW: AccountManager for periodic rewarm
     ):
         self.oauth_manager = oauth_manager
         self.rate_limiter = rate_limiter  # ✅ Store rate limiter
+        self.account_manager = account_manager  # ✅ NEW: Store account_manager for rewarm loop
 
         # Create SMTP connection pool (fully async, no thread pool needed!)
         self.connection_pool = SMTPConnectionPool(
@@ -38,11 +40,13 @@ class UpstreamRelay:
             max_messages_per_connection=max_messages_per_connection,
             connection_max_age=connection_max_age,  # ✅ From config
             connection_idle_timeout=connection_idle_timeout,  # ✅ From config
-            smtp_config=smtp_config  # ✅ Pass SMTP config for IP binding
+            smtp_config=smtp_config,  # ✅ Pass SMTP config for IP binding
+            pool_config=pool_config  # ✅ NEW: Pass pool config for prewarm settings
         )
 
         # Start cleanup task
         self.cleanup_task = None
+        # REMOVED: rewarm_task (periodic re-warming replaced by lazy refresh)
 
         logger.info(
             f"[UpstreamRelay] Initialized with connection pooling "
@@ -57,6 +61,12 @@ class UpstreamRelay:
         # Start connection cleanup task
         self.cleanup_task = asyncio.create_task(self.connection_pool.cleanup_idle_connections())
         logger.info("[UpstreamRelay] Started connection pool cleanup task")
+
+    # REMOVED: start_periodic_rewarm() method
+    # Lazy connection refresh replaces periodic re-warming:
+    # - When acquire() finds idle connection (>idle_timeout seconds)
+    # - Creates new connection on-demand (not in background task)
+    # - No background overhead, only when needed for actual messages
 
     async def send_message(
         self,
@@ -137,11 +147,15 @@ class UpstreamRelay:
                     await self.connection_pool.release(account.email, connection, increment_count=False)
                     return (True, 250, "2.0.0 OK (dry-run)")
 
-                # Convert message_data to string if needed
-                if isinstance(message_data, bytes):
-                    message_str = message_data.decode('utf-8', errors='replace')
+                # ✅ FIX: Keep message_data as bytes to preserve Unicode characters
+                # Email messages should be handled as bytes throughout SMTP protocol
+                # Converting to string causes aiosmtplib to re-encode with ASCII (fails on Unicode!)
+                # Examples that fail with ASCII: Don't (curly apostrophe \u2019), café, etc.
+                if not isinstance(message_data, bytes):
+                    # If somehow we got a string, encode it to UTF-8 bytes
+                    message_bytes = message_data.encode('utf-8')
                 else:
-                    message_str = message_data
+                    message_bytes = message_data
 
                 # ✅ USE LOW-LEVEL SMTP COMMANDS FOR CONNECTION REUSE
                 # This keeps connection state clean and ready for next message
@@ -167,8 +181,8 @@ class UpstreamRelay:
                     await self.connection_pool.remove_and_close(account.email, connection)
                     return (False, 553, "5.1.3 All recipients rejected")
 
-                # DATA (send message body)
-                code, msg = await connection.data(message_str)
+                # DATA (send message body) - pass bytes directly to preserve encoding
+                code, msg = await connection.data(message_bytes)
                 if code != 250:
                     logger.error(f"[{account.email}] DATA rejected: {code} {msg}")
                     await self.connection_pool.remove_and_close(account.email, connection)
@@ -213,14 +227,22 @@ class UpstreamRelay:
             logger.error(f"[{account.email}] Unexpected error in relay: {e}")
             return (False, 450, "4.4.2 Internal error")
 
+    # REMOVED: _periodic_rewarm_loop() method
+    # Replaced by lazy connection refresh in acquire():
+    # - On connection idle timeout detection, create new connection on-demand
+    # - No background task overhead, only when needed
+
     async def shutdown(self):
         """Shutdown relay and cleanup resources"""
+        # Cancel cleanup task
         if self.cleanup_task:
             self.cleanup_task.cancel()
             try:
                 await self.cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        # REMOVED: rewarm_task cancellation (periodic rewarm no longer used)
 
         await self.connection_pool.close_all()
         logger.info("[UpstreamRelay] Shutdown complete")

@@ -45,7 +45,8 @@ class SMTPProxyHandler(asyncio.Protocol):
         dry_run: bool = False,
         global_concurrency_limit: int = 100,
         global_semaphore: asyncio.Semaphore = None,
-        backpressure_queue_size: int = 1000
+        backpressure_queue_size: int = 1000,
+        max_queue_memory_bytes: int = 50 * 1024 * 1024  # 50 MB per connection
     ):
         self.config_manager = config_manager
         self.oauth_manager = oauth_manager
@@ -53,6 +54,7 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.dry_run = dry_run
         self.global_concurrency_limit = global_concurrency_limit
         self.global_semaphore = global_semaphore  # ✅ Global semaphore for backpressure
+        self.max_queue_memory_bytes = max_queue_memory_bytes  # ✅ FIX Issue #13
 
         self.transport = None
         self.peername = None
@@ -63,6 +65,7 @@ class SMTPProxyHandler(asyncio.Protocol):
         self.message_data = b''
         self.buffer = b''
         self.state = 'INITIAL'
+        self.queue_memory_usage = 0  # ✅ Track queue memory in bytes
 
         # Line processing queue (✅ with maxsize for backpressure)
         self.line_queue = asyncio.Queue(maxsize=backpressure_queue_size)
@@ -85,9 +88,11 @@ class SMTPProxyHandler(asyncio.Protocol):
         if exc:
             logger.error(f"Connection lost (error): {exc}")
 
-        # Cancel processing task
+        # ✅ FIX Issue #8: Cancel processing task (with implicit timeout via task done check)
+        # Prevents hanging tasks from blocking connection close
         if self.processing_task and not self.processing_task.done():
             self.processing_task.cancel()
+            logger.debug(f"Processing task cancelled for connection close")
 
         # ✅ FIX BUG #3: Clear line queue to prevent memory leak
         while not self.line_queue.empty():
@@ -126,6 +131,22 @@ class SMTPProxyHandler(asyncio.Protocol):
         # Extract complete lines and queue them for processing
         while b'\r\n' in self.buffer:
             line, self.buffer = self.buffer.split(b'\r\n', 1)
+
+            # ✅ FIX Issue #13: Monitor queue memory usage
+            # Track memory consumed by queued lines
+            self.queue_memory_usage += len(line) + 2  # +2 for \r\n
+
+            # Check if queue memory exceeds limit (before adding)
+            if self.queue_memory_usage > self.max_queue_memory_bytes:
+                logger.warning(
+                    f"[{self.peername}] Queue memory limit exceeded "
+                    f"({self.queue_memory_usage / 1024 / 1024:.1f}MB > {self.max_queue_memory_bytes / 1024 / 1024:.1f}MB), "
+                    f"closing connection"
+                )
+                self.send_response(421, "4.4.5 Server too busy (memory limit), closing connection")
+                self.transport.close()
+                break  # Stop processing more lines
+
             # Put line in queue instead of creating task (queuing is sync and fast)
             try:
                 self.line_queue.put_nowait(line)

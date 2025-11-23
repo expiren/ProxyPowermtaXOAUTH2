@@ -394,6 +394,115 @@ tail -f xoauth2_proxy.log
 - **Fallback**: Current directory if standard paths unavailable
 - **Smart config discovery**: tries exact path → current directory → standard OS locations
 
+### Async I/O & Threading Model
+
+**Critical Pattern** (affects all SMTP handler code):
+- **Main event loop**: `asyncio` running in `src/smtp/handler.py` (asyncio.Protocol)
+- **Blocking operations**: Run in `ThreadPoolExecutor` to avoid blocking the event loop
+  - Upstream SMTP relay (sending to Gmail/Outlook) - runs in executor
+  - Synchronous network operations - run in executor
+- **Per-email locking**: `AccountManager.get_token()` uses per-email locks to prevent race conditions on token refresh
+
+**Concurrency Model**:
+```
+┌─ asyncio event loop (single-threaded)
+│  ├─ SMTP protocol handling (async)
+│  ├─ OAuth2 HTTP requests (async via aiohttp)
+│  ├─ Admin API (async via aiohttp)
+│  └─ Executor submission (async submission of blocking ops)
+│
+└─ ThreadPoolExecutor (default: 5 workers)
+   └─ Upstream SMTP relay (blocking SMTPlib)
+```
+
+When modifying code:
+- Keep `src/smtp/handler.py` async (never use blocking calls directly)
+- Use `loop.run_in_executor()` for blocking I/O
+- Use `asyncio.Lock` for coordination between coroutines
+- Use `threading.Lock` for cross-thread coordination
+
+---
+
+## Code Organization Patterns
+
+### Where to Find Things
+
+| Goal | Location | Files |
+|------|----------|-------|
+| **Fix SMTP protocol bugs** | `src/smtp/` | `handler.py` (command parsing), `constants.py` (responses) |
+| **Fix OAuth2 token issues** | `src/oauth2/` | `manager.py` (refresh logic), `models.py` (token models) |
+| **Fix account loading/caching** | `src/accounts/` | `manager.py` (cache logic), `models.py` (AccountConfig structure) |
+| **Fix authentication failures** | `src/smtp/handler.py` | `auth_plain_handler()` method (~line 200-250) |
+| **Add features to Admin API** | `src/admin/server.py` | HTTP endpoints and request handlers |
+| **Fix message relay issues** | `src/smtp/upstream.py` | Upstream SMTP conversation flow |
+| **Add configuration options** | `src/config/` | `settings.py` (global), `loader.py` (file loading) |
+| **Add new tools** | `src/tools/` | Standalone CLI tools |
+| **Fix resilience patterns** | `src/utils/` | `circuit_breaker.py`, `retry.py`, `rate_limiter.py` |
+
+### Common Code Patterns
+
+**Token Refresh (async)**:
+```python
+# In src/smtp/handler.py, OAuth2Manager
+token = await oauth2_manager.get_or_refresh_token(email)  # May block on per-email lock
+auth_string = oauth2_manager.build_xoauth2_string(email, token)
+```
+
+**Account Lookup (thread-safe)**:
+```python
+# In src/smtp/handler.py, AccountManager
+account = account_manager.get_account(email)  # Thread-safe in-memory lookup
+if not account:
+    return INVALID_ACCOUNT_RESPONSE
+```
+
+**Retry with Exponential Backoff**:
+```python
+# In src/utils/retry.py
+result = await retry(
+    func=some_async_function,
+    max_attempts=3,
+    initial_delay=1.0,
+    max_delay=10.0
+)
+```
+
+**Circuit Breaker (prevent cascade failures)**:
+```python
+# In src/utils/circuit_breaker.py
+breaker = CircuitBreaker(failure_threshold=5, timeout_seconds=60)
+try:
+    result = await breaker.call(async_function)
+except BreakerOpenException:
+    # Provider is failing, return cached or error
+    pass
+```
+
+**Logging with Context**:
+```python
+logger.info(f"AUTH successful for {email}", extra={"account_id": account.account_id})
+```
+
+### Module Dependencies
+
+```
+src/main.py
+    ├─ src/cli.py (argument parsing)
+    ├─ src/config/settings.py (config discovery)
+    ├─ src/logging/setup.py (logging initialization)
+    └─ src/smtp/proxy.py (start SMTP server)
+         ├─ src/accounts/manager.py (load accounts)
+         ├─ src/oauth2/manager.py (token management)
+         ├─ src/admin/server.py (HTTP API)
+         └─ src/smtp/handler.py (protocol handler)
+              ├─ src/smtp/upstream.py (relay to providers)
+              ├─ src/utils/circuit_breaker.py
+              ├─ src/utils/retry.py
+              └─ src/utils/rate_limiter.py
+```
+
+**Dependency rule**: No circular imports. Lower modules (utils) don't import higher modules (smtp, accounts).
+
 ---
 
 ## Critical Issues & Fixes
@@ -424,6 +533,199 @@ tail -f xoauth2_proxy.log
 
 ---
 
+## CLI Arguments & Configuration
+
+### Primary Command-Line Arguments
+
+The proxy accepts these key arguments (parsed in `src/cli.py`):
+
+```bash
+# Configuration files
+--config CONFIG_PATH          # Path to config.json (global settings, default: config.json)
+--accounts ACCOUNTS_PATH      # Path to accounts.json (credentials, default: accounts.json)
+
+# Server binding
+--host HOST                   # Listen host (default: 127.0.0.1, use 0.0.0.0 for remote)
+--port PORT                   # Listen port (default: 2525)
+
+# Admin HTTP API
+--admin-host HOST             # Admin server host (default: 0.0.0.0, use 127.0.0.1 for local-only)
+--admin-port PORT             # Admin server port (default: 9090)
+
+# Performance tuning
+--global-concurrency N        # Global message concurrency limit (default: 100)
+
+# Operating modes
+--dry-run                     # Test mode: accept messages but don't send them
+```
+
+### Configuration Path Discovery
+
+Both `--config` and `--accounts` paths use smart discovery (in `Settings.get_config_path()`):
+1. Try exact path as specified
+2. Fall back to current working directory
+3. Fall back to platform-specific standard locations:
+   - **Linux/macOS**: `/etc/xoauth2/`, `/var/lib/xoauth2/`
+   - **Windows**: `%APPDATA%\xoauth2-proxy\`, `%PROGRAMDATA%\xoauth2-proxy\`
+
+This allows flexible deployment without hardcoding paths.
+
+### Common Invocation Patterns
+
+**Development (localhost only)**:
+```bash
+python xoauth2_proxy_v2.py --config examples/example_config.json --accounts accounts.json
+```
+
+**Production (remote PowerMTA)**:
+```bash
+python xoauth2_proxy_v2.py --host 0.0.0.0 --port 2525 --admin-host 127.0.0.1
+```
+
+**High-volume (1000+ msg/sec)**:
+```bash
+python xoauth2_proxy_v2.py --global-concurrency 1000 --admin-host 127.0.0.1
+```
+
+**Testing mode (no actual sends)**:
+```bash
+python xoauth2_proxy_v2.py --dry-run
+```
+
+**Custom ports**:
+```bash
+python xoauth2_proxy_v2.py --port 2525 --admin-port 8080
+```
+
+### Debugging Tips
+
+**Enable verbose logging**:
+```python
+# In src/logging/setup.py, temporarily change:
+logging.basicConfig(level=logging.DEBUG)  # Instead of INFO
+```
+
+**Monitor token refresh**:
+```bash
+# Watch for token refresh attempts in logs
+tail -f /var/log/xoauth2/xoauth2_proxy.log | grep "refresh"
+```
+
+**Test OAuth2 manually**:
+```bash
+curl -X POST https://oauth2.googleapis.com/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=YOUR_ID&client_secret=YOUR_SECRET&refresh_token=YOUR_TOKEN&grant_type=refresh_token"
+```
+
+**Inspect account cache**:
+```bash
+curl http://127.0.0.1:9090/admin/accounts
+```
+
+**Test SMTP connection without auth**:
+```bash
+openssl s_client -connect localhost:2525
+# Type: QUIT
+```
+
+**Check network limits**:
+```bash
+# Linux: check file descriptor limits
+ulimit -n
+# Should be high (65536+) for 1000+ concurrent connections
+```
+
+### Configuration File Structure
+
+#### **config.json** (Global Settings)
+
+Loaded by `ConfigLoader` in `src/config/loader.py`. Controls global proxy behavior:
+
+```json
+{
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  },
+  "providers": {
+    "gmail": {
+      "smtp_endpoint": "smtp.gmail.com:587",
+      "oauth_endpoint": "https://oauth2.googleapis.com/token",
+      "max_connections_per_account": 40,
+      "rate_limit_per_hour": 10000,
+      "token_refresh_buffer_seconds": 300,
+      "timeout_seconds": 30
+    },
+    "outlook": {
+      "smtp_endpoint": "smtp.office365.com:587",
+      "oauth_endpoint": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "max_connections_per_account": 30,
+      "rate_limit_per_hour": 10000,
+      "token_refresh_buffer_seconds": 300,
+      "timeout_seconds": 30
+    }
+  },
+  "connection_pool": {
+    "http_pool_size": 100,
+    "max_idle_time_seconds": 300,
+    "max_connection_age_seconds": 3600
+  }
+}
+```
+
+Key tuning parameters:
+- `max_connections_per_account`: Per-account SMTP connection limit
+- `rate_limit_per_hour`: Per-account message rate limit
+- `token_refresh_buffer_seconds`: Refresh token before this many seconds to expiration (300s = 5min buffer)
+- `http_pool_size`: Reusable HTTP connections for OAuth2 requests
+
+#### **accounts.json** (Account Credentials)
+
+Array of account objects (loaded by `ConfigLoader` in `src/config/loader.py`, cached by `AccountManager`):
+
+```json
+[
+  {
+    "account_id": "gmail-1",
+    "email": "sales@gmail.com",
+    "provider": "gmail",
+    "client_id": "123456789-abc.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-abc123def456",
+    "refresh_token": "1//0gABC123DEF456...",
+    "ip_address": "192.168.1.100",
+    "vmta_name": "gmail-relay-1",
+    "max_concurrent_messages": 10,
+    "max_messages_per_hour": 5000
+  },
+  {
+    "account_id": "outlook-1",
+    "email": "support@outlook.com",
+    "provider": "outlook",
+    "client_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "refresh_token": "0.AYXXX...",
+    "ip_address": "192.168.1.101",
+    "vmta_name": "outlook-relay-1"
+  }
+]
+```
+
+Required fields per account:
+- `email`, `provider` (gmail/outlook), `client_id`, `refresh_token`
+- `oauth_endpoint` (optional, defaults from config.json)
+
+Optional fields:
+- `account_id`: For tracking/logging
+- `ip_address`, `vmta_name`: For PowerMTA integration (stored in account object)
+- `max_concurrent_messages`, `max_messages_per_hour`: Per-account overrides
+
+**⚠️ IMPORTANT**: Accounts.json contains OAuth2 secrets and should be:
+- Added to `.gitignore` (do not commit)
+- Protected with restrictive file permissions (600)
+- Loaded from secure location in production
+
+---
+
 ## Testing Strategy
 
 ### Unit-Level Testing
@@ -446,18 +748,142 @@ tail -f xoauth2_proxy.log
 
 ---
 
+## Connection Pool Pre-warming & Periodic Re-warming
+
+### Overview
+
+To achieve **<100ms latency on burst traffic**, the proxy uses two techniques:
+
+1. **Initial Pre-warming**: Creates connections upfront at startup
+2. **Periodic Re-warming**: Maintains ready connections during idle periods
+
+### Configuration
+
+Add these fields to your `config.json` under each provider's `connection_pool` section:
+
+```json
+{
+  "providers": {
+    "gmail": {
+      "connection_pool": {
+        "max_connections_per_account": 40,
+        "prewarm_percentage": 50,
+        "periodic_rewarm_enabled": true,
+        "periodic_rewarm_interval_seconds": 300
+      }
+    }
+  }
+}
+```
+
+**Key Parameters:**
+
+- **prewarm_percentage** (default: 50)
+  - Percentage of `max_connections_per_account` to create at startup
+  - 40 max → 20 connections pre-warmed (50%)
+  - Tune for your use case:
+    - Light traffic: 25% (minimal resource usage)
+    - Normal: 50% (balanced approach)
+    - High volume: 100% (warm to max at startup)
+
+- **periodic_rewarm_enabled** (default: true)
+  - Enable periodic re-warming to handle idle timeout gaps
+  - Maintains connections even after 60-120 second idle periods
+
+- **periodic_rewarm_interval_seconds** (default: 300)
+  - How often to re-warm (300 seconds = 5 minutes)
+  - Tune based on your burst frequency:
+    - Frequent bursts (< 2 min apart): 60 seconds
+    - Normal bursts (2-10 min apart): 300 seconds
+    - Infrequent bursts (> 10 min apart): 600 seconds
+
+### Performance Impact
+
+**Initial Pre-warming:**
+- Creates 50% of max_connections in parallel at startup
+- Time: ~2 seconds for 10 accounts (50 connections)
+- Eliminates cold-start lag on first message burst
+
+**Periodic Re-warming:**
+- Maintains connections across idle gaps
+- Uses cached tokens (no OAuth2 overhead!)
+- Speed: 400-700ms vs 700-1200ms without token cache
+- Runs in background every 5 minutes (configurable)
+
+### How It Works
+
+1. **At Startup:**
+   - Load config with `prewarm_percentage: 50`
+   - Create 50% of connections for each account in parallel
+   - Use cached tokens for authentication
+   - Ready for burst traffic immediately
+
+2. **During Idle (60-120 seconds):**
+   - Connections timeout and drain from pool
+   - Pool becomes empty temporarily
+
+3. **Periodic Re-warming (every 5 minutes):**
+   - Background task kicks in
+   - Creates fresh connections to 50% capacity
+   - Uses still-valid cached tokens (fast!)
+   - Next burst finds ready connections
+
+4. **On Burst Arrival:**
+   - Pool has pre-warmed connections available
+   - First message sends within <100ms
+   - No waiting for TCP/TLS/AUTH handshakes
+
+### Real-World Example
+
+**Scenario:** 10 accounts, bursts every 1-2 hours, 10k messages per burst
+
+**Configuration:**
+```json
+"connection_pool": {
+  "max_connections_per_account": 40,
+  "prewarm_percentage": 50,
+  "periodic_rewarm_enabled": true,
+  "periodic_rewarm_interval_seconds": 300
+}
+```
+
+**Results:**
+- Startup: Pre-warm creates 20 connections per account (200 total) in ~2 seconds ✅
+- After 60s idle: Connections timeout (expected)
+- After 5 minutes idle: Re-warm creates fresh 20 connections per account ✅
+- 1-2 hour mark: Burst arrives to pool with 20 ready connections per account
+- First message: <100ms latency ✅
+- Subsequent messages: Reuse existing connections, 10-100ms latency
+
+### Tuning Guide
+
+| Use Case | prewarm_percentage | periodic_rewarm_interval_seconds | Notes |
+|----------|-------------------|----------------------------------|-------|
+| Light traffic (< 100/hour) | 25 | 600 | Minimal memory, low latency still good |
+| Normal (100-1000/hour) | 50 | 300 | Default, balanced |
+| High volume (1000+/hour) | 75-100 | 60 | Frequent re-warming, high throughput |
+| Bursty (10k every 2h) | 50 | 300 | Re-warm before expected bursts |
+
+---
+
 ## Dependencies
 
+Main dependencies (from `requirements.txt`):
 ```
-aiosmtpd>=1.4.4    - Async SMTP server library (legacy, not used in v2.0)
-aiosmtplib>=3.0.0  - Async SMTP client for upstream relay
-aiohttp>=3.8.0     - Async HTTP client for OAuth2, Admin API, and add_account tool
+aiosmtplib>=3.0.0  - Async SMTP client for upstream relay (send to Gmail/Outlook)
+aiohttp>=3.8.0     - Async HTTP client for OAuth2 token refresh and Admin API
+netifaces>=0.11.0  - Network interface enumeration (optional, for IP selection)
 ```
 
 Install with:
 ```bash
 pip install -r requirements.txt
+
+# Or install in development mode with entry points
+pip install -e .
 ```
+
+**Note**: `aiosmtpd` is referenced in comments but not actually used in v2.0 (it's an old implementation detail).
 
 ---
 

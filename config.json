@@ -32,7 +32,7 @@
       "_oauth2_timeout_doc": "Timeout for OAuth2 token refresh requests to Google/Microsoft (default: 10 seconds)",
 
       "connection_acquire_timeout": 5,
-      "_connection_acquire_timeout_doc": "Timeout for acquiring connection from pool (default: 5 seconds)",
+      "_connection_acquire_timeout_doc": "[DEPRECATED - Not used] Timeout for acquiring connection from pool (default: 5 seconds, replaced by per-connection timeouts)",
 
       "smtp_command_timeout": 300,
       "_smtp_command_timeout_doc": "Timeout for SMTP commands (default: 300 seconds / 5 minutes)",
@@ -142,8 +142,26 @@
         "connection_idle_timeout_seconds": 30,
         "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 120, HIGH-VOLUME: 30 seconds)",
 
-        "connection_acquire_timeout_seconds": 5,
-        "_connection_acquire_timeout_seconds_doc": "Timeout for acquiring connection from pool (default: 5 seconds)"
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true, replaces fixed percentage pre-warming)",
+
+        "prewarm_min_connections": 1,
+        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1, ensures <100ms latency on cold start)",
+
+        "prewarm_max_connections": 10,
+        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 10, scales based on traffic)",
+
+        "prewarm_min_message_threshold": 100,
+        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100, prevents wasting resources on inactive accounts)",
+
+        "prewarm_messages_per_connection": 10,
+        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10, lower=more_connections, higher=fewer_connections)",
+
+        "prewarm_concurrent_tasks": 100,
+        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100, prevents memory spike)",
+
+        "idle_connection_reuse_timeout": 120,
+        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120, detects stale connections)"
       },
 
       "rate_limiting": {
@@ -219,8 +237,26 @@
         "connection_idle_timeout_seconds": 30,
         "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60, HIGH-VOLUME: 30 seconds)",
 
-        "connection_acquire_timeout_seconds": 5,
-        "_connection_acquire_timeout_seconds_doc": "Timeout for acquiring connection from pool (default: 5 seconds)"
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true, replaces fixed percentage pre-warming)",
+
+        "prewarm_min_connections": 1,
+        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1, ensures <100ms latency on cold start)",
+
+        "prewarm_max_connections": 8,
+        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 8, lower than Gmail due to stricter Outlook limits)",
+
+        "prewarm_min_message_threshold": 100,
+        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100, prevents wasting resources on inactive accounts)",
+
+        "prewarm_messages_per_connection": 10,
+        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10, lower=more_connections, higher=fewer_connections)",
+
+        "prewarm_concurrent_tasks": 100,
+        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100, prevents memory spike)",
+
+        "idle_connection_reuse_timeout": 120,
+        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120, detects stale connections)"
       },
 
       "rate_limiting": {
@@ -276,11 +312,40 @@
       "_description": "Default settings for unknown/custom providers",
 
       "connection_pool": {
+        "_description": "Connection pool settings for default/custom providers",
+
         "max_connections_per_account": 30,
+        "_max_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 30)",
+
         "max_messages_per_connection": 50,
+        "_max_messages_per_connection_doc": "Maximum messages before closing connection (default: 50)",
+
         "connection_max_age_seconds": 300,
+        "_connection_max_age_seconds_doc": "Maximum connection lifetime in seconds (default: 300 = 5 minutes)",
+
         "connection_idle_timeout_seconds": 60,
-        "connection_acquire_timeout_seconds": 5
+        "_connection_idle_timeout_seconds_doc": "Idle timeout before closing connection (default: 60 seconds)",
+
+        "adaptive_prewarm_enabled": true,
+        "_adaptive_prewarm_enabled_doc": "Enable adaptive pre-warming based on traffic patterns (default: true)",
+
+        "prewarm_min_connections": 1,
+        "_prewarm_min_connections_doc": "Minimum connections to pre-warm for every active account (default: 1)",
+
+        "prewarm_max_connections": 8,
+        "_prewarm_max_connections_doc": "Maximum connections to pre-warm per account (default: 8)",
+
+        "prewarm_min_message_threshold": 100,
+        "_prewarm_min_message_threshold_doc": "Only pre-warm accounts that sent >100 messages in last hour (default: 100)",
+
+        "prewarm_messages_per_connection": 10,
+        "_prewarm_messages_per_connection_doc": "Tuning parameter: connections = messages_per_hour / 60 / this_value (default: 10)",
+
+        "prewarm_concurrent_tasks": 100,
+        "_prewarm_concurrent_tasks_doc": "Maximum concurrent connection creations during startup (default: 100)",
+
+        "idle_connection_reuse_timeout": 120,
+        "_idle_connection_reuse_timeout_doc": "Consider connection idle after N seconds and create replacement on-demand (default: 120)"
       },
 
       "rate_limiting": {
@@ -313,6 +378,8 @@
     "4": "Individual accounts can override provider defaults in accounts.json using optional fields",
     "5": "Send SIGHUP signal (Unix) to hot-reload configuration without restarting: kill -HUP <pid>",
     "6": "Windows does not support SIGHUP - restart required for config changes",
-    "7": "See docs/DEPLOYMENT_GUIDE.md for production configuration recommendations"
+    "7": "See docs/DEPLOYMENT_GUIDE.md for production configuration recommendations",
+    "8": "ADAPTIVE PRE-WARMING (v2.0): Connections now scale based on actual traffic, not fixed percentages. See 'adaptive_prewarm_enabled' and 'prewarm_max_connections' fields",
+    "9": "DEPRECATED FIELDS (kept for backward compatibility but not used): prewarm_percentage, periodic_rewarm_enabled, periodic_rewarm_interval_seconds, rewarm_concurrent_tasks in src/config/proxy_config.py"
   }
 }

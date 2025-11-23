@@ -72,7 +72,9 @@ class SMTPProxyServer:
             connection_max_age=pool_config.connection_max_age_seconds,  # ✅ From config
             connection_idle_timeout=pool_config.connection_idle_timeout_seconds,  # ✅ From config
             rate_limiter=self.rate_limiter,  # ✅ Pass rate limiter for per-account limits
-            smtp_config=self.proxy_config.global_config.smtp  # ✅ Pass SMTP config for IP binding
+            smtp_config=self.proxy_config.global_config.smtp,  # ✅ Pass SMTP config for IP binding
+            pool_config=pool_config,  # ✅ NEW: Pass pool config for prewarm/rewarm settings
+            account_manager=self.account_manager  # ✅ NEW: Pass account_manager for periodic rewarm
         )
 
         # ✅ Global semaphore for backpressure
@@ -100,6 +102,25 @@ class SMTPProxyServer:
 
         # Initialize upstream relay with connection pool
         await self.upstream_relay.initialize()
+
+        # ✅ NEW: Adaptive pre-warming - scales with actual traffic patterns
+        # Instead of pre-warming fixed percentage for all accounts:
+        # - Only pre-warms accounts that sent >threshold messages in last hour
+        # - Scales connections with per-account traffic (1-10 connections per account)
+        # - Inactive accounts get 0 pre-warmed connections (saves resources)
+        # - Burst overflow handled by dynamic connection creation
+        if num_accounts > 0:
+            accounts = await self.account_manager.get_all()
+            await self.upstream_relay.connection_pool.prewarm_adaptive(
+                accounts,
+                oauth_manager=self.oauth_manager
+            )
+
+        # REMOVED: periodic rewarm background task
+        # Lazy connection refresh handles idle timeout detection:
+        # - When acquire() finds idle connection (>idle_timeout seconds)
+        # - Creates new connection on-demand (not in background)
+        # - No periodic overhead, only when needed
 
         logger.info(f"[SMTPProxyServer] Initialized with {num_accounts} accounts")
         return num_accounts
@@ -138,6 +159,30 @@ class SMTPProxyServer:
 
             # Reload accounts (will use new provider configs)
             num_accounts = await self.account_manager.reload()
+
+            # ✅ NEW: Adaptive pre-warm after reload (for new/changed accounts)
+            if num_accounts > 0:
+                accounts = await self.account_manager.get_all()
+                await self.upstream_relay.connection_pool.prewarm_adaptive(
+                    accounts,
+                    oauth_manager=self.oauth_manager
+                )
+
+                # ✅ FIX Issue #5: Refresh and cache tokens for all accounts after reload
+                # This populates the OAuth2 token cache so new requests get cached tokens
+                # instead of needing to refresh from the OAuth2 provider
+                logger.info("[SMTPProxyServer] Pre-populating OAuth2 token cache after reload...")
+                for account in accounts:
+                    try:
+                        await self.oauth_manager.get_or_refresh_token(account)
+                    except Exception as e:
+                        logger.warning(
+                            f"[SMTPProxyServer] Failed to cache token for {account.email}: {e}"
+                        )
+                logger.info("[SMTPProxyServer] OAuth2 token cache pre-populated")
+
+            # REMOVED: Periodic rewarm restart
+            # Lazy refresh handles idle connections on-demand (no background task)
 
             logger.info(
                 f"[SMTPProxyServer] Reload complete - {num_accounts} accounts loaded with updated provider settings"

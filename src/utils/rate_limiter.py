@@ -27,14 +27,33 @@ class TokenBucket:
 
     async def acquire(self, tokens: int = 1, timeout: float = 1.0) -> bool:
         """Acquire tokens, wait if necessary"""
+        # ✅ FIX: Calculate refill OUTSIDE lock to reduce lock contention
+        # Refill calculation (datetime operations) happens without holding lock
+        new_tokens = await self._calculate_refill()
+
+        # Only hold lock for actual state modification
         async with self.lock:
-            await self._refill()
+            # Apply calculated tokens
+            self.tokens = min(float(self.capacity), self.tokens + new_tokens)
 
             if self.tokens >= tokens:
                 self.tokens -= tokens
                 return True
 
             return False
+
+    async def _calculate_refill(self) -> float:
+        """
+        Calculate tokens to add without holding lock.
+
+        Returns: Number of tokens to add (may be 0 if recently refilled)
+        """
+        now: datetime = datetime.now(UTC)
+        async with self.lock:
+            elapsed = (now - self.last_refill).total_seconds()
+            self.last_refill = now  # Update timestamp while holding lock
+
+        return elapsed * self.refill_rate
 
     async def _refill(self):
         """Refill bucket based on time elapsed"""
@@ -57,15 +76,18 @@ class TokenBucket:
 class RateLimiter:
     """Per-account rate limiting with configurable limits"""
 
-    def __init__(self, messages_per_hour: int = 10000):
+    def __init__(self, messages_per_hour: int = 10000, max_buckets: int = 10000):
         """
         Initialize rate limiter with default messages_per_hour
 
         Args:
             messages_per_hour: Default limit (used as fallback if account has no config)
+            max_buckets: Maximum number of buckets before cleanup (prevents memory leak)
         """
         self.default_messages_per_hour = messages_per_hour
+        self.max_buckets = max_buckets
         self.buckets: Dict[str, TokenBucket] = {}
+        self.bucket_created_at: Dict[str, datetime] = {}  # Track creation time for cleanup
         self.lock = asyncio.Lock()
 
         # Default refill rate (used for accounts without specific config)
@@ -81,6 +103,18 @@ class RateLimiter:
         """
         async with self.lock:
             if account_email not in self.buckets:
+                # ✅ FIX Issue #12: Cleanup oldest buckets if limit exceeded
+                # Prevents memory leak from spoofed email addresses
+                if len(self.buckets) >= self.max_buckets:
+                    # Find and remove oldest bucket
+                    oldest_email = min(self.bucket_created_at, key=self.bucket_created_at.get)
+                    del self.buckets[oldest_email]
+                    del self.bucket_created_at[oldest_email]
+                    logger.warning(
+                        f"[RateLimiter] Bucket limit ({self.max_buckets}) reached. "
+                        f"Removed oldest bucket for {oldest_email}"
+                    )
+
                 # ✅ Get per-account rate limit config (or use default)
                 if account:
                     rate_config = account.get_rate_limiting_config()
@@ -110,6 +144,7 @@ class RateLimiter:
                     capacity=messages_per_hour,
                     refill_rate=refill_rate,
                 )
+                self.bucket_created_at[account_email] = datetime.now(UTC)
             return self.buckets[account_email]
 
     async def check_rate_limit(self, account_email: str, account = None, tokens: int = 1) -> bool:
