@@ -127,6 +127,9 @@
       "smtp_endpoint": "smtp.gmail.com:587",
       "_smtp_endpoint_doc": "Default SMTP endpoint for Gmail accounts",
 
+      "max_concurrent_messages": 15,
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 15, Gmail has generous rate limits)",
+
       "connection_pool": {
         "_description": "Connection pool settings for Gmail accounts",
 
@@ -222,6 +225,9 @@
       "smtp_endpoint": "smtp.office365.com:587",
       "_smtp_endpoint_doc": "Default SMTP endpoint for Outlook accounts",
 
+      "max_concurrent_messages": 12,
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 12, Outlook has stricter rate limits)",
+
       "connection_pool": {
         "_description": "Connection pool settings for Outlook accounts",
 
@@ -310,6 +316,9 @@
 
     "default": {
       "_description": "Default settings for unknown/custom providers",
+
+      "max_concurrent_messages": 10,
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (default: 10, conservative for unknown providers)",
 
       "connection_pool": {
         "_description": "Connection pool settings for default/custom providers",

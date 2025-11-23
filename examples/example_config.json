@@ -30,6 +30,9 @@
     "gmail": {
       "description": "Gmail (smtp.gmail.com:587) settings",
 
+      "max_concurrent_messages": 15,
+      "_max_concurrent_comment": "Per-account concurrency limit - maximum concurrent messages being processed for a single Gmail account (default: 15, Gmail is generous). When reached, proxy returns SMTP 451 asking PowerMTA to retry.",
+
       "connection_pool": {
         "_comment_pool": "Core pool settings",
         "max_connections_per_account": 40,
@@ -80,6 +83,9 @@
     "outlook": {
       "description": "Outlook (smtp.office365.com:587) settings",
 
+      "max_concurrent_messages": 12,
+      "_max_concurrent_comment": "Per-account concurrency limit - maximum concurrent messages being processed for a single Outlook account (default: 12, Outlook is stricter). When reached, proxy returns SMTP 451 asking PowerMTA to retry.",
+
       "connection_pool": {
         "_comment_pool": "Core pool settings",
         "max_connections_per_account": 30,
@@ -129,6 +135,9 @@
 
     "default": {
       "description": "Default settings for unknown providers",
+
+      "max_concurrent_messages": 10,
+      "_max_concurrent_comment": "Per-account concurrency limit - maximum concurrent messages for a single account with unknown/custom provider (default: 10, conservative). When reached, proxy returns SMTP 451.",
 
       "connection_pool": {
         "_comment_pool": "Core pool settings",

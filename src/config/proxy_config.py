@@ -123,6 +123,7 @@ class ProviderConfig:
     rate_limiting: RateLimitConfig
     retry: RetryConfig
     circuit_breaker: CircuitBreakerConfig
+    max_concurrent_messages: int = 10  # Per-account concurrency limit (default: 10)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ProviderConfig':
@@ -132,6 +133,7 @@ class ProviderConfig:
             rate_limiting=RateLimitConfig.from_dict(data.get('rate_limiting', {})),
             retry=RetryConfig.from_dict(data.get('retry', {})),
             circuit_breaker=CircuitBreakerConfig.from_dict(data.get('circuit_breaker', {})),
+            max_concurrent_messages=data.get('max_concurrent_messages', 10),
         )
 
 
@@ -303,6 +305,7 @@ class ProxyConfig:
             ),
             retry=RetryConfig(max_attempts=2, backoff_factor=2.0),
             circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
+            max_concurrent_messages=15,  # Gmail has generous rate limits
         )
 
         # Default Outlook config (✅ with adaptive pre-warming)
@@ -326,6 +329,7 @@ class ProxyConfig:
             ),
             retry=RetryConfig(max_attempts=2, backoff_factor=2.0),
             circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
+            max_concurrent_messages=12,  # Outlook has stricter rate limits
         )
 
         # Default fallback config (✅ with adaptive pre-warming)
@@ -343,6 +347,7 @@ class ProxyConfig:
             rate_limiting=RateLimitConfig(messages_per_hour=5000),
             retry=RetryConfig(max_attempts=2),
             circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
+            max_concurrent_messages=10,  # Conservative default for unknown providers
         )
 
     def get_provider_config(self, provider: str) -> ProviderConfig:

@@ -71,6 +71,10 @@ class AccountConfig:
         """
         from src.config.proxy_config import ConnectionPoolConfig, RateLimitConfig, RetryConfig, CircuitBreakerConfig
 
+        # ✅ Apply per-provider max_concurrent_messages limit
+        # Provider config has provider-specific limits (Gmail: 15, Outlook: 12, Default: 10)
+        self.max_concurrent_messages = provider_config.max_concurrent_messages
+
         # Merge connection pool settings
         pool_data = provider_config.connection_pool.__dict__.copy()
         if self.connection_settings:
