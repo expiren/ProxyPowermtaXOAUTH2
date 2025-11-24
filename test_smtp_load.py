@@ -21,6 +21,7 @@ from datetime import datetime
 import aiosmtplib
 import json
 import sys
+import signal
 
 # Setup logging
 logging.basicConfig(
@@ -28,6 +29,9 @@ logging.basicConfig(
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger('smtp_load_test')
+
+# Global flag for graceful shutdown
+shutdown_event = asyncio.Event()
 
 
 class SMTPLoadTester:
@@ -142,6 +146,8 @@ Sent at: {datetime.now().isoformat()}
         logger.info(f"From: {self.from_email}")
         logger.info(f"To: {self.to_email}")
         logger.info("=" * 80)
+        logger.info("Press Ctrl+C to cancel at any time")
+        logger.info("=" * 80)
 
         self.stats['start_time'] = datetime.now()
         test_start = time.time()
@@ -151,18 +157,19 @@ Sent at: {datetime.now().isoformat()}
         logger.info(f"Will send in {num_batches} batches of {self.concurrent}")
 
         # Send emails in batches
-        for batch_num in range(num_batches):
-            batch_start = time.time()
-            batch_size = min(self.concurrent, self.num_emails - batch_num * self.concurrent)
+        try:
+            for batch_num in range(num_batches):
+                batch_start = time.time()
+                batch_size = min(self.concurrent, self.num_emails - batch_num * self.concurrent)
 
-            # Create batch tasks
-            tasks = [
-                self.send_email(batch_num * self.concurrent + i)
-                for i in range(batch_size)
-            ]
+                # Create batch tasks
+                tasks = [
+                    self.send_email(batch_num * self.concurrent + i)
+                    for i in range(batch_size)
+                ]
 
-            # Wait for batch to complete
-            results = await asyncio.gather(*tasks, return_exceptions=False)
+                # Wait for batch to complete
+                results = await asyncio.gather(*tasks, return_exceptions=False)
 
             # Process results
             for success, latency, error_msg in results:
@@ -192,11 +199,15 @@ Sent at: {datetime.now().isoformat()}
                 f"Throughput: {requests_per_sec:.1f} req/s"
             )
 
-        self.stats['end_time'] = datetime.now()
-        total_time = time.time() - test_start
+        except KeyboardInterrupt:
+            logger.info("\n\nTest interrupted by user (Ctrl+C)")
+            logger.info(f"Stopped after {self.stats['successful']} successful sends")
+        finally:
+            self.stats['end_time'] = datetime.now()
+            total_time = time.time() - test_start
 
-        # Print results
-        self._print_results(total_time)
+            # Print results
+            self._print_results(total_time)
 
     def _print_results(self, total_time: float):
         """Print detailed test results"""
@@ -286,8 +297,17 @@ Sent at: {datetime.now().isoformat()}
             logger.error(f"Failed to save results: {e}")
 
 
+def handle_signal(signum, frame):
+    """Handle Ctrl+C gracefully"""
+    logger.info("\n\nShutting down gracefully... (Ctrl+C again to force quit)")
+    sys.exit(0)
+
+
 async def main():
     """Main entry point"""
+    # Register signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, handle_signal)
+
     parser = argparse.ArgumentParser(
         description='SMTP Load Testing Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -342,8 +362,25 @@ Examples:
         default='recipient@outlook.com',
         help='To email address (default: recipient@outlook.com)'
     )
+    parser.add_argument(
+        '--use-mock-tokens',
+        action='store_true',
+        help='Use mock cached tokens instead of real OAuth2 (for testing without credentials)'
+    )
 
     args = parser.parse_args()
+
+    # Use mock tokens if requested
+    if args.use_mock_tokens:
+        try:
+            from mock_oauth2_tokens import list_available_accounts
+            accounts = list_available_accounts()
+            if args.from_email == 'test@example.com':  # Still default
+                args.from_email = accounts[0]
+                logger.info(f"Using first mock account: {args.from_email}")
+            logger.info("Mock OAuth2 tokens enabled")
+        except ImportError:
+            logger.warning("mock_oauth2_tokens not found, proceeding without mock tokens")
 
     # Create and run tester
     tester = SMTPLoadTester(

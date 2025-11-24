@@ -328,8 +328,32 @@ Examples:
         action='store_true',
         help='List all available scenarios'
     )
+    parser.add_argument(
+        '--use-mock-tokens',
+        action='store_true',
+        help='Use mock cached tokens instead of real OAuth2 (for testing without credentials)'
+    )
 
     args = parser.parse_args()
+
+    # Setup signal handler for Ctrl+C
+    import signal
+    def handle_signal(signum, frame):
+        logger.info("\n\nTest interrupted (Ctrl+C)")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    # Use mock tokens if requested
+    if args.use_mock_tokens:
+        try:
+            from mock_oauth2_tokens import list_available_accounts
+            accounts = list_available_accounts()
+            if args.from_email == 'test@example.com':  # Still default
+                args.from_email = accounts[0]
+                logger.info(f"Using first mock account: {args.from_email}")
+            logger.info("Mock OAuth2 tokens enabled")
+        except ImportError:
+            logger.warning("mock_oauth2_tokens not found, proceeding without mock tokens")
 
     # List scenarios
     if args.list:
