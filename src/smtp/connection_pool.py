@@ -507,10 +507,10 @@ class SMTPConnectionPool:
                 try:
                     await asyncio.sleep(10)  # Run every 10 seconds (HIGH-VOLUME: faster cleanup)
 
-                    # ✅ FIX: Take snapshot of accounts INSIDE lock to prevent race condition
+                    # ✅ FIX #6: Use self.locks instead of self.pools (updated for idle/busy structure)
                     # Between snapshot and iteration, account could be deleted by hot-reload
                     async with self._dict_lock:
-                        accounts = list(self.pools.keys())
+                        accounts = list(self.locks.keys())
 
                     # Cleanup all accounts in parallel (huge speedup!)
                     cleanup_tasks = [
