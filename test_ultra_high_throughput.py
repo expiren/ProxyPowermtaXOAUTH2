@@ -1,27 +1,30 @@
 """
-Ultra-High Throughput Testing (5000+ msg/sec)
+Ultra-High Throughput Testing (5000+ msg/sec) via Proxy
 
-This tool tests the proxy with ultra-high message throughput:
-- Sends 5000-50000+ messages per second
-- Tests connection pool limits
-- Measures peak performance
-- Handles failures gracefully
-- Tracks latency under extreme load
+This tool tests the XOAUTH2 proxy with ultra-high message throughput:
+- Sends 5000-50000+ messages per second through your proxy
+- Proxy relays to Gmail/Outlook via OAuth2
+- Tests connection pool and token refresh limits
+- Measures peak performance and latency under load
+- Tracks failures and error breakdown
 
-This is the "stress test" version - pushes the proxy to its limits.
+This is the "stress test" version - pushes your proxy to its limits.
 
-Usage:
-    # 5000 messages per second (100 concurrent, 50 messages each)
-    python test_ultra_high_throughput.py --num-emails 5000 --concurrent 100
+IMPORTANT: Start your proxy FIRST:
+    python3 xoauth2_proxy_v2.py --host 0.0.0.0 --port 2525 --admin-port 9091
+
+Then run tests:
+    # 5000 messages per second (100 concurrent)
+    python test_ultra_high_throughput.py --num-emails 5000 --concurrent 100 --from email@gmail.com
 
     # 10000 messages per second (200 concurrent)
-    python test_ultra_high_throughput.py --num-emails 10000 --concurrent 200
+    python test_ultra_high_throughput.py --num-emails 10000 --concurrent 200 --from email@gmail.com
 
     # 50000 messages per second (500 concurrent, extreme stress)
-    python test_ultra_high_throughput.py --num-emails 50000 --concurrent 500 --verbose
+    python test_ultra_high_throughput.py --num-emails 50000 --concurrent 500 --from email@gmail.com --verbose
 
-    # Real provider test at 5000 msg/sec
-    python test_ultra_high_throughput.py --num-emails 5000 --concurrent 100 --use-real-provider --from email@gmail.com --password token
+    # Remote proxy (if running on different host)
+    python test_ultra_high_throughput.py --num-emails 5000 --concurrent 100 --host 192.168.1.100 --port 2525 --from email@gmail.com
 """
 
 import asyncio
@@ -54,26 +57,20 @@ class UltraHighThroughputTester:
         concurrent: int = 100,
         from_email: str = 'test.account1@gmail.com',
         to_email: str = 'recipient@outlook.com',
-        use_real_provider: bool = False,
-        provider_host: str = 'smtp.gmail.com',
-        provider_port: int = 587,
-        provider_password: str = 'placeholder',
+        proxy_password: str = 'placeholder',
         verbose: bool = False
     ):
         """
         Initialize ultra-high throughput tester
 
         Args:
-            host: Proxy host (or provider host if using real)
-            port: Proxy port (or provider port if using real)
+            host: Proxy host (default: 127.0.0.1)
+            port: Proxy port (default: 2525)
             num_emails: Total messages to send
             concurrent: Concurrent connections (higher = more throughput)
-            from_email: From email address
+            from_email: From email address (must exist in proxy's accounts.json)
             to_email: To email address
-            use_real_provider: Connect to real provider endpoint
-            provider_host: Real provider host (if use_real_provider=True)
-            provider_port: Real provider port
-            provider_password: Real provider password/token
+            proxy_password: Password for proxy auth (usually placeholder)
             verbose: Verbose logging
         """
         self.host = host
@@ -82,10 +79,7 @@ class UltraHighThroughputTester:
         self.concurrent = concurrent
         self.from_email = from_email
         self.to_email = to_email
-        self.use_real_provider = use_real_provider
-        self.provider_host = provider_host
-        self.provider_port = provider_port
-        self.provider_password = provider_password
+        self.proxy_password = proxy_password
         self.verbose = verbose
 
         # Target: X requests per second
@@ -108,7 +102,7 @@ class UltraHighThroughputTester:
 
     async def send_email_fast(self, email_index: int) -> Tuple[bool, float, str]:
         """
-        Send email as fast as possible with minimal overhead
+        Send email through proxy with minimal overhead
 
         Returns:
             Tuple of (success: bool, latency: float, error_msg: str)
@@ -117,44 +111,36 @@ class UltraHighThroughputTester:
         error_msg = ""
 
         try:
-            # Connect to proxy or provider
-            if self.use_real_provider:
-                host = self.provider_host
-                port = self.provider_port
-                password = self.provider_password
-            else:
-                host = self.host
-                port = self.port
-                password = 'placeholder'
-
-            async with aiosmtplib.SMTP(hostname=host, port=port, timeout=10) as smtp:
-                await smtp.ehlo()
-
-                # For real provider, need TLS and real auth
-                if self.use_real_provider:
-                    try:
-                        await smtp.starttls()
-                    except Exception as e:
-                        latency = time.time() - start_time
-                        return False, latency, f"STARTTLS failed: {str(e)[:50]}"
-
+            # Connect to proxy
+            async with aiosmtplib.SMTP(hostname=self.host, port=self.port, timeout=10) as smtp:
+                # EHLO handshake
+                try:
                     await smtp.ehlo()
-                    try:
-                        await smtp.login(self.from_email, password)
-                    except Exception as e:
-                        latency = time.time() - start_time
-                        error_msg = str(e)[:100]
-                        return False, latency, error_msg
+                except Exception as e:
+                    latency = time.time() - start_time
+                    return False, latency, f"EHLO failed: {str(e)[:50]}"
 
-                # Minimal email (fastest possible)
+                # Authenticate to proxy (using from_email and proxy_password)
+                # Proxy validates against accounts.json and refreshes OAuth2 token
+                try:
+                    await smtp.login(self.from_email, self.proxy_password)
+                except Exception as e:
+                    latency = time.time() - start_time
+                    error_msg = str(e)[:100]
+                    return False, latency, f"AUTH failed: {error_msg}"
+
+                # Build minimal email (fastest possible)
                 message = f"From: {self.from_email}\r\nTo: {self.to_email}\r\nSubject: T#{email_index}\r\n\r\nTest"
 
+                # Send through proxy
+                # Proxy will relay to Gmail/Outlook using OAuth2
                 try:
                     await smtp.sendmail(self.from_email, [self.to_email], message)
                 except Exception as e:
                     latency = time.time() - start_time
                     return False, latency, f"SEND failed: {str(e)[:50]}"
 
+                # Close connection gracefully
                 try:
                     await smtp.quit()
                 except Exception:
@@ -168,20 +154,18 @@ class UltraHighThroughputTester:
             return False, latency, str(e)[:100]
 
     async def run_ultra_high_throughput_test(self):
-        """Execute ultra-high throughput test"""
+        """Execute ultra-high throughput test through proxy"""
         logger.info("=" * 80)
-        logger.info("ULTRA-HIGH THROUGHPUT TEST (5000+ msg/sec)")
+        logger.info("ULTRA-HIGH THROUGHPUT TEST VIA PROXY (5000+ msg/sec)")
         logger.info("=" * 80)
-
-        if self.use_real_provider:
-            logger.info(f"Target: {self.provider_host}:{self.provider_port} (REAL PROVIDER)")
-        else:
-            logger.info(f"Target: {self.host}:{self.port} (Proxy)")
-
+        logger.info(f"Proxy: {self.host}:{self.port}")
+        logger.info(f"Proxy will relay to: Gmail/Outlook via OAuth2")
         logger.info(f"Total emails: {self.num_emails}")
         logger.info(f"Concurrent connections: {self.concurrent}")
-        logger.info(f"From: {self.from_email}")
+        logger.info(f"From: {self.from_email} (must exist in proxy's accounts.json)")
         logger.info(f"To: {self.to_email}")
+        logger.info("=" * 80)
+        logger.info("Make sure proxy is running: python3 xoauth2_proxy_v2.py --host 0.0.0.0 --port 2525")
         logger.info("=" * 80)
         logger.info("Press Ctrl+C to cancel")
         logger.info("=" * 80)
@@ -317,14 +301,15 @@ class UltraHighThroughputTester:
         overall_throughput = self.stats['successful'] / sum(self.stats['latencies']) if sum(self.stats['latencies']) > 0 else 0
 
         results = {
-            'test_type': 'ultra_high_throughput',
+            'test_type': 'ultra_high_throughput_via_proxy',
             'timestamp': self.stats['start_time'].isoformat() if self.stats['start_time'] else None,
-            'target': f"{self.provider_host if self.use_real_provider else self.host}:{self.provider_port if self.use_real_provider else self.port}",
-            'test_mode': 'real_provider' if self.use_real_provider else 'proxy',
+            'proxy_target': f"{self.host}:{self.port}",
+            'backend': 'Gmail/Outlook via OAuth2',
             'config': {
                 'num_emails': self.num_emails,
                 'concurrent': self.concurrent,
                 'from_email': self.from_email,
+                'to_email': self.to_email,
             },
             'results': {
                 'total_requests': self.stats['total_requests'],
@@ -421,26 +406,10 @@ Examples:
         help='To email (default: recipient@outlook.com)'
     )
     parser.add_argument(
-        '--use-real-provider',
-        action='store_true',
-        help='Connect to real provider endpoint (Gmail/Outlook)'
-    )
-    parser.add_argument(
-        '--provider-host',
-        type=str,
-        help='Real provider host (smtp.gmail.com or smtp.office365.com)'
-    )
-    parser.add_argument(
-        '--provider-port',
-        type=int,
-        default=587,
-        help='Real provider port (default: 587)'
-    )
-    parser.add_argument(
         '--password',
         type=str,
         default='placeholder',
-        help='Password/token for real provider auth'
+        help='Password for proxy auth (default: placeholder)'
     )
     parser.add_argument(
         '--verbose',
@@ -450,15 +419,7 @@ Examples:
 
     args = parser.parse_args()
 
-    # Auto-detect provider host
-    provider_host = args.provider_host
-    if args.use_real_provider and not provider_host:
-        if '@gmail.com' in args.from_email:
-            provider_host = 'smtp.gmail.com'
-        else:
-            provider_host = 'smtp.office365.com'
-
-    # Create tester
+    # Create tester (sends all requests through proxy)
     tester = UltraHighThroughputTester(
         host=args.host,
         port=args.port,
@@ -466,10 +427,7 @@ Examples:
         concurrent=args.concurrent,
         from_email=args.from_email,
         to_email=args.to_email,
-        use_real_provider=args.use_real_provider,
-        provider_host=provider_host or 'smtp.gmail.com',
-        provider_port=args.provider_port,
-        provider_password=args.password,
+        proxy_password=args.password,
         verbose=args.verbose
     )
 
