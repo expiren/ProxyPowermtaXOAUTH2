@@ -4,9 +4,20 @@ import ipaddress
 import logging
 import socket
 import subprocess
+import time
 from typing import List, Optional
 
 logger = logging.getLogger('xoauth2_proxy')
+
+# ===================================================================
+# IP Cache with TTL (Performance Optimization)
+# ===================================================================
+# Cache server IPs with 60-second TTL to avoid repeated subprocess calls
+# This eliminates ~10ms per account operation (1 second per batch of 100)
+_server_ips_cache = {
+    'ips': None,
+    'expires_at': 0
+}
 
 
 # ===================================================================
@@ -48,9 +59,19 @@ def get_server_ips() -> List[str]:
     """
     Get all IP addresses configured on the server
 
+    ✅ PERF FIX #3: Caches results with 60-second TTL
+    Eliminates repeated subprocess calls (~10ms per call, 1 second per 100 accounts)
+
     Returns:
         List of IP addresses (IPv4 and IPv6)
     """
+    global _server_ips_cache
+
+    # Check cache first
+    if _server_ips_cache['ips'] is not None and time.time() < _server_ips_cache['expires_at']:
+        logger.debug(f"[NetUtils] Using cached server IPs ({len(_server_ips_cache['ips'])} addresses)")
+        return _server_ips_cache['ips']
+
     ips = []
 
     try:
@@ -120,7 +141,10 @@ def get_server_ips() -> List[str]:
             except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
                 logger.debug(f"[NetUtils] Could not run 'ip addr show': {e}")
 
-        logger.debug(f"[NetUtils] Found {len(ips)} IP addresses on server")
+        # Cache results for 60 seconds
+        _server_ips_cache['ips'] = ips
+        _server_ips_cache['expires_at'] = time.time() + 60
+        logger.debug(f"[NetUtils] Found {len(ips)} IP addresses on server (cached for 60s)")
         return ips
 
     except Exception as e:

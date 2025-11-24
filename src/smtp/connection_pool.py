@@ -77,13 +77,14 @@ class SMTPConnectionPool:
                 f"Found {len(self.server_ips_cache)} public IP(s) on server (IPv6: {'enabled' if use_ipv6 else 'disabled'})"
             )
 
-        # Pool: account_email -> deque of PooledConnection (O(1) operations!)
-        # Using deque instead of list for better performance:
-        # - append(): O(1) vs list O(1) - same
-        # - popleft(): O(1) vs list.pop(0) O(n) - faster
-        # - iteration: O(n) vs list O(n) - same
-        # - filter/remove: O(n) but we batch operations
-        self.pools: Dict[str, deque[PooledConnection]] = {}
+        # ✅ PERF FIX #6: Pool structure optimization for O(1) connection lookup
+        # Before: single deque with O(n) search through all connections
+        # After: separate idle/busy deques with O(1) acquire (popleft on idle queue)
+
+        # pool_idle[account_email] -> deque of available (idle) PooledConnections
+        # pool_busy[account_email] -> set of in-use PooledConnections
+        self.pool_idle: Dict[str, deque[PooledConnection]] = {}
+        self.pool_busy: Dict[str, set[PooledConnection]] = {}
         self.locks: Dict[str, asyncio.Lock] = {}
         # ✅ FIX #4: REMOVED all semaphores (no fair queueing limits)
         # Removed: self.semaphores - now connections can be created freely without limits
@@ -154,7 +155,9 @@ class SMTPConnectionPool:
             # Initialize account pools/locks if not already done
             if account_email not in self.locks:
                 self.locks[account_email] = asyncio.Lock()
-                self.pools[account_email] = deque()  # Use deque, not list
+                # ✅ PERF FIX #6: Separate idle/busy tracking for O(1) acquire
+                self.pool_idle[account_email] = deque()  # Available connections
+                self.pool_busy[account_email] = set()    # In-use connections
                 # ✅ FIX #4: REMOVED semaphore - no fair queueing limit
 
         lock = self.locks[account_email]
@@ -163,22 +166,19 @@ class SMTPConnectionPool:
         # Connections can now be created freely without fair-queueing delays
         try:
 
-            # ===== PHASE 1: Check for available connection (QUICK, WITH LOCK)
+            # ===== PHASE 1: Check for available connection (QUICK, WITH LOCK, NOW O(1)!)
             async with lock:
-                pool = self.pools[account_email]
+                pool_idle = self.pool_idle[account_email]
+                pool_busy = self.pool_busy[account_email]
 
-                # Collect bad connections to remove (more efficient than removing during iteration)
-                to_remove = []
-
-                # Try to find available connection from pool
-                for pooled in pool:
-                    if pooled.is_busy:
-                        continue
+                # ✅ PERF FIX #6: O(1) acquire - pop first idle connection (instant!)
+                # No more O(n) search through entire pool
+                while pool_idle:
+                    pooled = pool_idle.popleft()  # ✅ O(1) pop from deque
 
                     # Check if connection should be removed
                     if pooled.is_expired(self.connection_max_age):
                         await self._close_connection(pooled)
-                        to_remove.append(pooled)
                         continue
 
                     # ✅ NEW: Use adaptive idle timeout if configured, otherwise use default
@@ -189,13 +189,11 @@ class SMTPConnectionPool:
 
                     if pooled.is_idle_too_long(idle_timeout):
                         await self._close_connection(pooled)
-                        to_remove.append(pooled)
                         continue
 
                     # Check if connection used too many times (✅ uses per-account setting!)
                     if pooled.message_count >= max_msg:
                         await self._close_connection(pooled)
-                        to_remove.append(pooled)
                         continue
 
                     # REMOVED: NOOP health check (caused 50k+ extra SMTP commands per minute!)
@@ -205,19 +203,12 @@ class SMTPConnectionPool:
                     # Connection is good - reuse it
                     pooled.is_busy = True
                     pooled.last_used = datetime.now(UTC)
+                    pool_busy.add(pooled)  # ✅ Move to busy set O(1)
                     # ✅ FIX #4: REMOVED semaphore tracking
                     self.stats['pool_hits'] += 1
                     self.stats['connections_reused'] += 1
 
-                    # Remove bad connections (one pass instead of multiple remove() calls)
-                    if to_remove:
-                        self.pools[account_email] = deque(p for p in pool if p not in to_remove)
-
                     return pooled.connection
-
-                # Remove bad connections if we didn't find a good one (one pass filter)
-                if to_remove:
-                    self.pools[account_email] = deque(p for p in pool if p not in to_remove)
 
                 # No available connection - note that we need to create one
                 self.stats['pool_misses'] += 1
@@ -228,20 +219,24 @@ class SMTPConnectionPool:
 
             # Check pool size limit (must be done under lock, re-acquire if needed)
             async with lock:
-                pool = self.pools[account_email]
-                if len(pool) >= max_conn:
-                    # Find and close oldest non-busy connection
-                    non_busy = [p for p in pool if not p.is_busy]
-                    if non_busy:
-                        oldest = min(non_busy, key=lambda p: p.created_at)
+                pool_idle = self.pool_idle[account_email]
+                pool_busy = self.pool_busy[account_email]
+                total_conns = len(pool_idle) + len(pool_busy)
+
+                if total_conns >= max_conn:
+                    # Find and close oldest idle connection
+                    if pool_idle:
+                        oldest = min(pool_idle, key=lambda p: p.created_at)
                         await self._close_connection(oldest)
-                        # Filter out the oldest connection (O(n) but single pass)
-                        self.pools[account_email] = deque(p for p in pool if p is not oldest)
+                        # Remove from idle queue (O(n) but minimal - usually just a few connections)
+                        # and we only do this when we're at capacity
+                        pool_idle_list = [p for p in pool_idle if p is not oldest]
+                        self.pool_idle[account_email] = deque(pool_idle_list)
                     else:
                         # ✅ FIX #4: REMOVED semaphore check message
                         # We'll just create more connections if needed - no fair queueing
                         logger.warning(
-                            f"[Pool] All {len(pool)} connections busy for {account_email}, "
+                            f"[Pool] All {total_conns} connections busy for {account_email}, "
                             f"will create new connection"
                         )
 
@@ -286,20 +281,26 @@ class SMTPConnectionPool:
 
             # ===== PHASE 3: Add to pool (QUICK, WITH LOCK)
             async with lock:
-                # Double-check: another coroutine might have added a good connection
-                pool = self.pools[account_email]
+                # ✅ PERF FIX #6: Double-check using idle queue (O(1) check instead of O(n))
+                # Another coroutine might have added a good connection
+                pool_idle = self.pool_idle[account_email]
+                pool_busy = self.pool_busy[account_email]
 
-                for pooled in pool:
-                    if pooled.is_busy:
-                        continue
+                # Check if any idle connection became available (much faster check now)
+                if pool_idle:
+                    pooled = pool_idle.popleft()  # ✅ O(1) pop
                     if not pooled.is_expired(self.connection_max_age):
                         # Another thread added a good connection, use that instead
                         await connection.quit()  # Close the one we created
                         pooled.is_busy = True
                         pooled.last_used = datetime.now(UTC)
+                        pool_busy.add(pooled)  # ✅ Move to busy set O(1)
                         # ✅ FIX #4: REMOVED semaphore tracking
                         self.stats['pool_hits'] += 1
                         return pooled.connection
+                    else:
+                        # Connection expired, close it
+                        await self._close_connection(pooled)
 
                 # Still need our new one, add and return it
                 pooled = PooledConnection(
@@ -311,7 +312,7 @@ class SMTPConnectionPool:
                     is_busy=True
                     # ✅ FIX #4: REMOVED semaphore tracking
                 )
-                pool.append(pooled)
+                pool_busy.add(pooled)  # ✅ New connection starts in busy set
 
                 self.stats['connections_created'] += 1
 
@@ -324,25 +325,33 @@ class SMTPConnectionPool:
         """
         Release connection back to pool
 
+        ✅ PERF FIX #6: O(1) release with separate idle/busy tracking
+
         Args:
             account_email: Email address for this account
             connection: SMTP connection to release
             increment_count: Whether to increment message count
         """
         # Check if account exists (no lock needed for read-only check)
-        if account_email not in self.pools:
+        if account_email not in self.locks:
             return
 
         lock = self.locks[account_email]
         async with lock:
-            pool = self.pools[account_email]
+            pool_idle = self.pool_idle[account_email]
+            pool_busy = self.pool_busy[account_email]
 
-            for pooled in pool:
+            # Find connection in busy set (could use a mapping for O(1), but usually small)
+            for pooled in pool_busy:
                 if pooled.connection is connection:
                     pooled.is_busy = False
                     pooled.last_used = datetime.now(UTC)
                     if increment_count:
                         pooled.message_count += 1
+
+                    # ✅ PERF FIX #6: Move from busy to idle (O(1) operations)
+                    pool_busy.discard(pooled)      # ✅ O(1) remove from set
+                    pool_idle.append(pooled)        # ✅ O(1) append to deque
 
                     # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
 
@@ -355,11 +364,13 @@ class SMTPConnectionPool:
         Use this instead of release() + quit() when a connection fails SMTP commands.
         This ensures the bad connection is removed from pool, not recycled.
 
+        ✅ PERF FIX #6: O(1) removal with separate idle/busy tracking
+
         Args:
             account_email: Email address for this account
             connection: Bad SMTP connection to remove and close
         """
-        if account_email not in self.pools:
+        if account_email not in self.locks:
             # Connection not in pool, just close it
             try:
                 await connection.quit()
@@ -369,18 +380,25 @@ class SMTPConnectionPool:
 
         lock = self.locks[account_email]
         async with lock:
-            pool = self.pools[account_email]
+            pool_idle = self.pool_idle[account_email]
+            pool_busy = self.pool_busy[account_email]
 
-            for pooled in pool:
+            # Check busy set first (active connections)
+            for pooled in pool_busy:
                 if pooled.connection is connection:
+                    # ✅ PERF FIX #6: O(1) removal from busy set
+                    pool_busy.discard(pooled)  # ✅ O(1)
                     # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
-
-                    # Remove from pool (filter creates new deque without this connection)
-                    self.pools[account_email] = deque(p for p in pool if p is not pooled)
-
-                    # Close connection
                     await self._close_connection(pooled)
+                    return
 
+            # Check idle set (inactive connections)
+            for pooled in pool_idle:
+                if pooled.connection is connection:
+                    # ✅ PERF FIX #6: O(n) removal from idle deque (but small, usually just a few)
+                    # This is the cost of detecting bad connections early
+                    self.pool_idle[account_email] = deque(p for p in pool_idle if p is not pooled)
+                    await self._close_connection(pooled)
                     return
 
             # Connection not found in pool, close it anyway
@@ -518,26 +536,38 @@ class SMTPConnectionPool:
     async def _cleanup_account(self, account_email: str):
         """Cleanup connections for a single account (called in parallel)"""
         try:
+            if account_email not in self.locks:
+                return
+
             lock = self.locks[account_email]
             async with lock:
-                pool = self.pools[account_email]
-                to_remove = []
+                pool_idle = self.pool_idle[account_email]
+                pool_busy = self.pool_busy[account_email]
+                to_remove = set()  # ✅ Use set for O(1) membership tests
 
-                for pooled in pool:
+                # Check idle connections (these are the ones we can safely clean up)
+                for pooled in list(pool_idle):  # Copy to avoid modification during iteration
+                    if (pooled.is_expired(self.connection_max_age) or
+                        pooled.is_idle_too_long(self.connection_idle_timeout)):
+                        to_remove.add(pooled)
+
+                # Also check busy connections (in case they became idle)
+                # But only close if they're not currently busy
+                for pooled in list(pool_busy):
                     if pooled.is_busy:
                         continue
 
                     if (pooled.is_expired(self.connection_max_age) or
                         pooled.is_idle_too_long(self.connection_idle_timeout)):
-                        to_remove.append(pooled)
+                        to_remove.add(pooled)
 
-                # Close connections before filtering
+                # Close and remove connections
                 for pooled in to_remove:
                     await self._close_connection(pooled)
+                    pool_idle.discard(pooled)   # O(1) remove from idle
+                    pool_busy.discard(pooled)   # O(1) remove from busy (if present)
 
-                # Filter deque in one pass (more efficient than multiple remove() calls)
                 if to_remove:
-                    self.pools[account_email] = deque(p for p in pool if p not in to_remove)
                     logger.info(
                         f"[Pool] Cleaned up {len(to_remove)} idle connections "
                         f"for {account_email}"
@@ -548,16 +578,25 @@ class SMTPConnectionPool:
 
     async def close_all(self):
         """Close all pooled connections"""
+        # ✅ PERF FIX #6: Updated for idle/busy pool structure
         # Get snapshot of accounts (no lock needed for list() on dict.keys())
-        accounts = list(self.pools.keys())
+        accounts = list(self.locks.keys())
 
         total_closed = 0
 
         for account_email in accounts:
             lock = self.locks[account_email]
             async with lock:
-                pool = self.pools[account_email]
-                for pooled in list(pool):  # Copy to avoid modification during iteration
+                pool_idle = self.pool_idle[account_email]
+                pool_busy = self.pool_busy[account_email]
+
+                # Close idle connections (safe)
+                for pooled in list(pool_idle):  # Copy to avoid modification during iteration
+                    await self._close_connection(pooled)
+                    total_closed += 1
+
+                # Close non-busy connections from busy set
+                for pooled in list(pool_busy):
                     if pooled.is_busy:
                         # Connection is busy - can't close it, will close when operation completes
                         # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
@@ -565,7 +604,10 @@ class SMTPConnectionPool:
 
                     await self._close_connection(pooled)
                     total_closed += 1
-                pool.clear()
+
+                # Clear both pools
+                pool_idle.clear()
+                pool_busy.clear()
 
         logger.info(f"[Pool] Closed all {total_closed} connections")
 
@@ -907,17 +949,18 @@ class SMTPConnectionPool:
                 source_ip=source_ip
             )
 
-            # Ensure account has pool/lock
+            # ✅ PERF FIX #6: Ensure account has idle/busy pools
             async with self._dict_lock:
-                if account.email not in self.pools:
-                    self.pools[account.email] = deque()
+                if account.email not in self.locks:
                     self.locks[account.email] = asyncio.Lock()
+                    self.pool_idle[account.email] = deque()
+                    self.pool_busy[account.email] = set()
                     # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
 
             # Add to pool (with lock)
             lock = self.locks[account.email]
             async with lock:
-                pool = self.pools[account.email]
+                pool_idle = self.pool_idle[account.email]
 
                 pooled = PooledConnection(
                     connection=connection,
@@ -928,7 +971,8 @@ class SMTPConnectionPool:
                     is_busy=False  # ✅ Not busy - ready for use!
                     # ✅ FIX #4: REMOVED semaphore field
                 )
-                pool.append(pooled)
+                # ✅ PERF FIX #6: Add to idle queue (O(1))
+                pool_idle.append(pooled)
 
             return True
 
@@ -1083,17 +1127,18 @@ class SMTPConnectionPool:
                 source_ip=source_ip
             )
 
-            # Ensure account has pool/lock
+            # ✅ PERF FIX #6: Ensure account has idle/busy pools
             async with self._dict_lock:
-                if account.email not in self.pools:
-                    self.pools[account.email] = deque()
+                if account.email not in self.locks:
                     self.locks[account.email] = asyncio.Lock()
+                    self.pool_idle[account.email] = deque()
+                    self.pool_busy[account.email] = set()
                     # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
 
             # Add to pool
             lock = self.locks[account.email]
             async with lock:
-                pool = self.pools[account.email]
+                pool_idle = self.pool_idle[account.email]
 
                 pooled = PooledConnection(
                     connection=connection,
@@ -1104,7 +1149,8 @@ class SMTPConnectionPool:
                     is_busy=False
                     # ✅ FIX #4: REMOVED semaphore field
                 )
-                pool.append(pooled)
+                # ✅ PERF FIX #6: Add to idle queue (O(1))
+                pool_idle.append(pooled)
 
             return True
 
@@ -1118,16 +1164,15 @@ class SMTPConnectionPool:
 
     def get_stats(self) -> dict:
         """Get pool statistics"""
-        total_connections = sum(len(pool) for pool in self.pools.values())
-        busy_connections = sum(
-            sum(1 for p in pool if p.is_busy)
-            for pool in self.pools.values()
-        )
+        # ✅ PERF FIX #6: Updated for idle/busy pool structure
+        total_idle = sum(len(pool) for pool in self.pool_idle.values())
+        total_busy = sum(len(pool) for pool in self.pool_busy.values())
+        total_connections = total_idle + total_busy
 
         return {
             'total_connections': total_connections,
-            'busy_connections': busy_connections,
-            'idle_connections': total_connections - busy_connections,
-            'accounts_in_pool': len(self.pools),
+            'busy_connections': total_busy,
+            'idle_connections': total_idle,
+            'accounts_in_pool': len(self.locks),
             **self.stats
         }
