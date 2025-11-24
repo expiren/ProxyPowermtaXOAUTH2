@@ -946,6 +946,49 @@ The proxy is **internal to PowerMTA** - your code only connects to PowerMTA port
 
 ---
 
+---
+
+## Guidelines for Claude Code Sessions
+
+### Documentation File Creation
+
+**⚠️ IMPORTANT**: Do NOT create new `.md` documentation files unless explicitly requested by the user.
+
+**Rule**:
+- Focus on **code changes and problem solving**, not documentation
+- Only create `.md` files if the user specifically asks for them
+- Use existing documentation (README.md, docs/) for reference
+- Ask the user before creating new docs files
+
+**Why**:
+- Excessive `.md` files clutter the repository
+- Code speaks for itself; focus on making it clear and correct
+- Users can request docs if they need them
+- Commit messages are sufficient for tracking changes
+
+**When to Create Docs**:
+1. User explicitly requests: "Create a guide for..."
+2. User asks: "Document how to..."
+3. User wants a README for a new tool/feature
+4. Otherwise: **Ask first** before creating new `.md` files
+
+**When NOT to Create Docs**:
+- ❌ Don't create summary files for each feature
+- ❌ Don't create quick-start guides automatically
+- ❌ Don't create troubleshooting guides without asking
+- ❌ Don't create INDEX.md or navigation files
+- ❌ Don't create CHANGELOG or version history files
+
+**Existing Documentation**:
+- README.md - Main project overview
+- QUICK_START.md - 3-step setup
+- docs/ - Feature-specific documentation
+- CLAUDE.md - This file, development guidance
+
+Use these instead of creating new files. Update them if needed.
+
+---
+
 ## Version History
 
 **v2.0** (Current - November 2025)
@@ -955,6 +998,12 @@ The proxy is **internal to PowerMTA** - your code only connects to PowerMTA port
 - ✅ Improved observability (Prometheus metrics, structured logging)
 - ✅ Cross-platform support (Windows/Linux/macOS)
 - ✅ Production-ready for 100-500 accounts
+- ✅ Performance Phase 1 fixes (2-5x improvement, 50-150 req/s)
+- ✅ Connection pool restructuring (O(1) lookups instead of O(n))
+- ✅ Load testing tools (test_smtp_load.py, test_smtp_scenarios.py)
+- ✅ Mock token caching (instant testing without real credentials)
+- ✅ Real provider testing (test_provider_throughput.py, test_ultra_high_throughput.py)
+- ✅ Graceful Ctrl+C shutdown for all test tools
 
 **v1.0** (Original - 2024)
 - ✅ Monolithic implementation (1100 lines)
