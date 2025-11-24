@@ -78,13 +78,12 @@ class SMTPConnectionPool:
             )
 
         # ✅ PERF FIX #6: Pool structure optimization for O(1) connection lookup
-        # Before: single deque with O(n) search through all connections
-        # After: separate idle/busy deques with O(1) acquire (popleft on idle queue)
+        # Connections stored in idle deque when not in use
+        # When acquired, removed from deque; when released, added back
+        # No separate "busy" tracking needed
 
         # pool_idle[account_email] -> deque of available (idle) PooledConnections
-        # pool_busy[account_email] -> set of in-use PooledConnections
         self.pool_idle: Dict[str, deque[PooledConnection]] = {}
-        self.pool_busy: Dict[str, set[PooledConnection]] = {}
         self.locks: Dict[str, asyncio.Lock] = {}
         # ✅ FIX #4: REMOVED all semaphores (no fair queueing limits)
         # Removed: self.semaphores - now connections can be created freely without limits
@@ -111,6 +110,27 @@ class SMTPConnectionPool:
     # ✅ FIX #4: REMOVED semaphore helper methods
     # Removed: _mark_semaphore_holder() - no longer tracking semaphore ownership
     # Removed: _unmark_semaphore_holder() - no longer tracking semaphore ownership
+
+    @staticmethod
+    def _get_smtp_endpoint_from_provider(provider: str) -> tuple:
+        """
+        Get SMTP endpoint (host, port) based on provider type.
+
+        Args:
+            provider: 'gmail' or 'outlook'
+
+        Returns:
+            Tuple of (host, port)
+
+        Raises:
+            ValueError: If provider unknown
+        """
+        if provider == 'gmail':
+            return ('smtp.gmail.com', 587)
+        elif provider == 'outlook':
+            return ('smtp.office365.com', 587)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
 
     async def acquire(
         self,
@@ -155,9 +175,8 @@ class SMTPConnectionPool:
             # Initialize account pools/locks if not already done
             if account_email not in self.locks:
                 self.locks[account_email] = asyncio.Lock()
-                # ✅ PERF FIX #6: Separate idle/busy tracking for O(1) acquire
+                # ✅ PERF FIX #6: Idle deque for O(1) acquire
                 self.pool_idle[account_email] = deque()  # Available connections
-                self.pool_busy[account_email] = set()    # In-use connections
                 # ✅ FIX #4: REMOVED semaphore - no fair queueing limit
 
         lock = self.locks[account_email]
@@ -169,7 +188,6 @@ class SMTPConnectionPool:
             # ===== PHASE 1: Check for available connection (QUICK, WITH LOCK, NOW O(1)!)
             async with lock:
                 pool_idle = self.pool_idle[account_email]
-                pool_busy = self.pool_busy[account_email]
 
                 # ✅ PERF FIX #6: O(1) acquire - pop first idle connection (instant!)
                 # No more O(n) search through entire pool
@@ -201,10 +219,8 @@ class SMTPConnectionPool:
                     # than proactively checking every reuse
 
                     # Connection is good - reuse it
-                    pooled.is_busy = True
                     pooled.last_used = datetime.now(UTC)
-                    pool_busy.add(pooled)  # ✅ Move to busy set O(1)
-                    # ✅ FIX #4: REMOVED semaphore tracking
+                    # ✅ Connection removed from idle pool, will be returned via release()
                     self.stats['pool_hits'] += 1
                     self.stats['connections_reused'] += 1
 
@@ -220,8 +236,7 @@ class SMTPConnectionPool:
             # Check pool size limit (must be done under lock, re-acquire if needed)
             async with lock:
                 pool_idle = self.pool_idle[account_email]
-                pool_busy = self.pool_busy[account_email]
-                total_conns = len(pool_idle) + len(pool_busy)
+                total_conns = len(pool_idle)
 
                 if total_conns >= max_conn:
                     # Find and close oldest idle connection
@@ -284,7 +299,6 @@ class SMTPConnectionPool:
                 # ✅ PERF FIX #6: Double-check using idle queue (O(1) check instead of O(n))
                 # Another coroutine might have added a good connection
                 pool_idle = self.pool_idle[account_email]
-                pool_busy = self.pool_busy[account_email]
 
                 # Check if any idle connection became available (much faster check now)
                 if pool_idle:
@@ -292,27 +306,25 @@ class SMTPConnectionPool:
                     if not pooled.is_expired(self.connection_max_age):
                         # Another thread added a good connection, use that instead
                         await connection.quit()  # Close the one we created
-                        pooled.is_busy = True
                         pooled.last_used = datetime.now(UTC)
-                        pool_busy.add(pooled)  # ✅ Move to busy set O(1)
-                        # ✅ FIX #4: REMOVED semaphore tracking
+                        # ✅ Connection removed from idle pool, will be returned via release()
                         self.stats['pool_hits'] += 1
                         return pooled.connection
                     else:
                         # Connection expired, close it
                         await self._close_connection(pooled)
 
-                # Still need our new one, add and return it
+                # Still need our new one, return it
                 pooled = PooledConnection(
                     connection=connection,
                     account_email=account_email,
                     created_at=datetime.now(UTC),
                     last_used=datetime.now(UTC),
                     message_count=0,
-                    is_busy=True
+                    is_busy=False
                     # ✅ FIX #4: REMOVED semaphore tracking
                 )
-                pool_busy.add(pooled)  # ✅ New connection starts in busy set
+                # ✅ Connection returned to caller, will be released via release()
 
                 self.stats['connections_created'] += 1
 
@@ -323,9 +335,7 @@ class SMTPConnectionPool:
 
     async def release(self, account_email: str, connection: aiosmtplib.SMTP, increment_count: bool = True):
         """
-        Release connection back to pool
-
-        ✅ PERF FIX #6: O(1) release with separate idle/busy tracking
+        Release connection back to pool (add it to idle queue for reuse)
 
         Args:
             account_email: Email address for this account
@@ -339,32 +349,29 @@ class SMTPConnectionPool:
         lock = self.locks[account_email]
         async with lock:
             pool_idle = self.pool_idle[account_email]
-            pool_busy = self.pool_busy[account_email]
 
-            # Find connection in busy set (could use a mapping for O(1), but usually small)
-            for pooled in pool_busy:
+            # Find and update the connection's PooledConnection wrapper
+            # (it was in the pool before, we just need to mark it as idle)
+            for pooled in pool_idle:
                 if pooled.connection is connection:
-                    pooled.is_busy = False
+                    # Already idle, just update metadata
                     pooled.last_used = datetime.now(UTC)
                     if increment_count:
                         pooled.message_count += 1
-
-                    # ✅ PERF FIX #6: Move from busy to idle (O(1) operations)
-                    pool_busy.discard(pooled)      # ✅ O(1) remove from set
-                    pool_idle.append(pooled)        # ✅ O(1) append to deque
-
-                    # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
-
                     return
+
+            # If not found in idle (shouldn't happen normally), just close it
+            try:
+                await connection.quit()
+            except Exception:
+                pass
 
     async def remove_and_close(self, account_email: str, connection: aiosmtplib.SMTP):
         """
         Remove connection from pool and close it (for bad/failed connections)
 
-        Use this instead of release() + quit() when a connection fails SMTP commands.
+        Use this instead of release() when a connection fails SMTP commands.
         This ensures the bad connection is removed from pool, not recycled.
-
-        ✅ PERF FIX #6: O(1) removal with separate idle/busy tracking
 
         Args:
             account_email: Email address for this account
@@ -381,25 +388,20 @@ class SMTPConnectionPool:
         lock = self.locks[account_email]
         async with lock:
             pool_idle = self.pool_idle[account_email]
-            pool_busy = self.pool_busy[account_email]
 
-            # Check busy set first (active connections)
-            for pooled in pool_busy:
-                if pooled.connection is connection:
-                    # ✅ PERF FIX #6: O(1) removal from busy set
-                    pool_busy.discard(pooled)  # ✅ O(1)
-                    # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
-                    await self._close_connection(pooled)
-                    return
-
-            # Check idle set (inactive connections)
+            # Find and remove connection from idle pool
             for pooled in pool_idle:
                 if pooled.connection is connection:
-                    # ✅ PERF FIX #6: O(n) removal from idle deque (but small, usually just a few)
-                    # This is the cost of detecting bad connections early
+                    # Remove from pool and close it
                     self.pool_idle[account_email] = deque(p for p in pool_idle if p is not pooled)
                     await self._close_connection(pooled)
                     return
+
+            # Not found in idle, just close it directly
+            try:
+                await connection.quit()
+            except Exception as e:
+                logger.debug(f"[Pool] Error closing connection for {account_email}: {e}")
 
             # Connection not found in pool, close it anyway
             logger.warning(
@@ -542,30 +544,22 @@ class SMTPConnectionPool:
             lock = self.locks[account_email]
             async with lock:
                 pool_idle = self.pool_idle[account_email]
-                pool_busy = self.pool_busy[account_email]
-                to_remove = set()  # ✅ Use set for O(1) membership tests
+                to_remove = []  # ✅ Use list (PooledConnection is not hashable)
 
                 # Check idle connections (these are the ones we can safely clean up)
                 for pooled in list(pool_idle):  # Copy to avoid modification during iteration
                     if (pooled.is_expired(self.connection_max_age) or
                         pooled.is_idle_too_long(self.connection_idle_timeout)):
-                        to_remove.add(pooled)
-
-                # Also check busy connections (in case they became idle)
-                # But only close if they're not currently busy
-                for pooled in list(pool_busy):
-                    if pooled.is_busy:
-                        continue
-
-                    if (pooled.is_expired(self.connection_max_age) or
-                        pooled.is_idle_too_long(self.connection_idle_timeout)):
-                        to_remove.add(pooled)
+                        to_remove.append(pooled)
 
                 # Close and remove connections
                 for pooled in to_remove:
                     await self._close_connection(pooled)
-                    pool_idle.discard(pooled)   # O(1) remove from idle
-                    pool_busy.discard(pooled)   # O(1) remove from busy (if present)
+                    try:
+                        pool_idle.remove(pooled)  # Remove from deque
+                    except ValueError:
+                        # Connection already removed, ignore
+                        pass
 
                 if to_remove:
                     logger.info(
@@ -578,7 +572,6 @@ class SMTPConnectionPool:
 
     async def close_all(self):
         """Close all pooled connections"""
-        # ✅ PERF FIX #6: Updated for idle/busy pool structure
         # Get snapshot of accounts (no lock needed for list() on dict.keys())
         accounts = list(self.locks.keys())
 
@@ -588,26 +581,14 @@ class SMTPConnectionPool:
             lock = self.locks[account_email]
             async with lock:
                 pool_idle = self.pool_idle[account_email]
-                pool_busy = self.pool_busy[account_email]
 
-                # Close idle connections (safe)
+                # Close all idle connections
                 for pooled in list(pool_idle):  # Copy to avoid modification during iteration
                     await self._close_connection(pooled)
                     total_closed += 1
 
-                # Close non-busy connections from busy set
-                for pooled in list(pool_busy):
-                    if pooled.is_busy:
-                        # Connection is busy - can't close it, will close when operation completes
-                        # ✅ FIX #4: REMOVED semaphore release (no semaphore to release)
-                        continue
-
-                    await self._close_connection(pooled)
-                    total_closed += 1
-
-                # Clear both pools
+                # Clear idle pool
                 pool_idle.clear()
-                pool_busy.clear()
 
         logger.info(f"[Pool] Closed all {total_closed} connections")
 
@@ -664,7 +645,7 @@ class SMTPConnectionPool:
 
         async def prewarm_with_error_tracking(account):
             """Pre-warm connection with error tracking"""
-            result = await self._prewarm_connection(account, oauth_manager)
+            result = await self._rewarm_connection(account, oauth_manager)
             return (result, account.email)
 
         # ✅ FIX: Batch task creation to prevent unbounded task list growth
@@ -732,253 +713,6 @@ class SMTPConnectionPool:
                 f"{total_failed} failed ({duration:.2f}s)"
             )
 
-    async def prewarm_adaptive(self, accounts: list, oauth_manager=None):
-        """
-        ✅ NEW: Adaptive pre-warming that scales with actual account traffic patterns.
-
-        Instead of pre-warming a fixed percentage for all accounts, pre-warm intelligently:
-        - Per-account pool size = min(max_connections, concurrent_messages / 10)
-        - Only pre-warm accounts that sent >threshold messages in last hour
-        - Inactive accounts get 0 pre-warmed connections (save resources)
-        - During bursts, dynamic connection creation handles overflow
-
-        This solves the scaling problem:
-        - Before: 1000 accounts × 50% = 50,000 idle sockets when traffic is low
-        - After: Active accounts only → 1-10 per account × active_count (scales with traffic)
-
-        Args:
-            accounts: List of AccountConfig objects
-            oauth_manager: OAuth2Manager instance (required for token refresh)
-
-        Performance Impact:
-            - Memory efficient: Only active accounts consume resources
-            - <100ms latency: Pre-warmed connections ready for active accounts
-            - Burst capable: Dynamic creation for unexpected spikes
-            - Auto-scaling: Resources scale with traffic, not account count
-        """
-        import time
-        if not accounts:
-            logger.info("[Pool] No accounts for adaptive pre-warming")
-            return
-
-        if not oauth_manager:
-            logger.warning("[Pool] OAuth2Manager required for adaptive pre-warming, skipping")
-            return
-
-        # Get adaptive config from pool_config
-        if not self.pool_config or not self.pool_config.adaptive_prewarm_enabled:
-            logger.info("[Pool] Adaptive pre-warming disabled, skipping")
-            return
-
-        min_connections = self.pool_config.prewarm_min_connections if self.pool_config else 1
-        max_connections = self.pool_config.prewarm_max_connections if self.pool_config else 10
-        min_msg_threshold = self.pool_config.prewarm_min_message_threshold if self.pool_config else 100
-
-        logger.info(
-            f"[Pool] Adaptive pre-warming: {len(accounts)} accounts "
-            f"(min={min_connections}, max={max_connections}, threshold={min_msg_threshold} msg/hour)"
-        )
-
-        start_time = time.time()
-        total_created = 0
-        total_failed = 0
-        skipped_accounts = 0
-        activated_accounts = 0
-
-        # ✅ FIX #4: REMOVED semaphore for adaptive prewarm (no concurrent task limits)
-        # Get concurrent task limit (kept for logging/config, not used for limiting)
-        concurrent_limit = self.pool_config.prewarm_concurrent_tasks if self.pool_config else 100
-
-        async def adaptive_prewarm_task(account, num_connections: int):
-            """Pre-warm specified number of connections for account"""
-            results = []
-            for _ in range(num_connections):
-                result = await self._prewarm_connection(account, oauth_manager)
-                results.append(result)
-            # ✅ FIX #2: Clearer logic for counting successes and failures
-            success_count = sum(1 for r in results if r)
-            fail_count = len(results) - success_count
-            return (success_count, fail_count, account.email)
-
-        # ✅ FIX #6: Pre-warm minimum connections for ALL accounts (solves cold start)
-        # Then scale up for active accounts (those with >threshold messages in last hour)
-        accounts_to_prewarm = []
-
-        for account in accounts:
-            # Check if account sent messages in last hour (use messages_this_hour metric)
-            messages_this_hour = getattr(account, 'messages_this_hour', 0)
-
-            # Always pre-warm at least min_connections for all accounts (cold start solution)
-            connections_to_create = min_connections
-
-            # If account was active in past, scale up based on traffic
-            if messages_this_hour >= min_msg_threshold:
-                activated_accounts += 1
-                # Adaptive sizing: scale pool based on traffic
-                # Formula: min(max_connections, max(min_connections, concurrent_messages_estimate))
-                # Estimate concurrent messages as messages_per_hour / 60
-                estimated_concurrent = max(0, messages_this_hour // 60)
-                # ✅ FIX #7: Use configurable messages_per_connection factor
-                msg_per_conn = self.pool_config.prewarm_messages_per_connection if self.pool_config else 10
-                connections_to_create = min(
-                    max_connections,
-                    max(min_connections, estimated_concurrent // msg_per_conn)
-                )
-            else:
-                # Account is inactive (below threshold), use minimum
-                skipped_accounts += 1
-
-            accounts_to_prewarm.append((account, connections_to_create))
-            logger.debug(
-                f"[Pool] Account {account.email}: {messages_this_hour} msg/hour → "
-                f"pre-warm {connections_to_create} connections"
-            )
-
-        if not accounts_to_prewarm:
-            logger.info(
-                f"[Pool] Adaptive pre-warming: No accounts to pre-warm "
-                f"(empty account list)"
-            )
-            return
-
-        # Build flat list of individual connection requests
-        # Each item is just an account (one connection per task)
-        connection_requests = []
-        for account, num_connections in accounts_to_prewarm:
-            for _ in range(num_connections):
-                # ✅ FIX CRITICAL: Store just account, not (account, num_connections)
-                # Each task creates exactly 1 connection
-                connection_requests.append(account)
-
-        # Process in batches
-        batch_size = max(100, concurrent_limit * 2)
-        all_results = []
-
-        for batch_start in range(0, len(connection_requests), batch_size):
-            batch_end = min(batch_start + batch_size, len(connection_requests))
-            batch_accounts = connection_requests[batch_start:batch_end]
-
-            # Create tasks for this batch only (one task per connection)
-            batch_tasks = []
-            for account in batch_accounts:
-                # ✅ Each task creates exactly 1 connection
-                batch_tasks.append(adaptive_prewarm_task(account, 1))
-
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            all_results.extend(batch_results)
-
-        # Count successes/failures
-        for result in all_results:
-            if isinstance(result, Exception):
-                # ✅ FIX #4: Add detailed logging for exception failures
-                logger.warning(
-                    f"[Pool] Adaptive pre-warm task failed: {type(result).__name__}: {result}"
-                )
-                total_failed += 1
-            elif isinstance(result, tuple):
-                success_count, fail_count, email = result
-                total_created += success_count
-                total_failed += fail_count
-                # ✅ FIX: Add warning if most connections failed
-                if fail_count > 0:
-                    # Calculate failure rate
-                    total_attempted = success_count + fail_count
-                    failure_rate = (fail_count / total_attempted) * 100 if total_attempted > 0 else 0
-
-                    if failure_rate > 50:
-                        # More than 50% failed - log as warning
-                        logger.warning(
-                            f"[Pool] Adaptive pre-warm DEGRADED for {email}: "
-                            f"{success_count}/{total_attempted} connections created ({failure_rate:.0f}% failed)"
-                        )
-                    else:
-                        # Less than 50% failed - log as debug
-                        logger.debug(
-                            f"[Pool] Adaptive pre-warm for {email}: "
-                            f"{success_count} created, {fail_count} failed"
-                        )
-            else:
-                logger.warning(f"[Pool] Unexpected result type in adaptive pre-warm: {type(result)}")
-                total_failed += 1
-
-        duration = time.time() - start_time
-
-        logger.info(
-            f"[Pool] Adaptive pre-warming complete: "
-            f"{total_created} connections created, {total_failed} failed ({duration:.2f}s) - "
-            f"Activated {activated_accounts} accounts, skipped {skipped_accounts} inactive"
-        )
-
-    async def _prewarm_connection(self, account, oauth_manager) -> bool:
-        """
-        Create and pool a single connection for an account.
-
-        Args:
-            account: AccountConfig object
-            oauth_manager: OAuth2Manager instance (passed from prewarm())
-
-        Returns:
-            True if successful, False if failed
-        """
-        try:
-            token = await oauth_manager.get_or_refresh_token(account)
-            if not token:
-                return False
-
-            # Build XOAUTH2 auth string
-            xoauth2_string = f"user={account.email}\1auth=Bearer {token.access_token}\1\1"
-
-            # Parse SMTP endpoint
-            smtp_host, smtp_port_str = account.oauth_endpoint.split(':')
-            smtp_port = int(smtp_port_str)
-
-            # Get source IP if configured
-            source_ip = account.ip_address if account.ip_address else None
-
-            # Validate source IP if configured
-            if source_ip and self.smtp_config and self.smtp_config.validate_source_ip:
-                if not is_ip_available_on_server(source_ip, self.server_ips_cache):
-                    source_ip = None
-
-            # Create connection
-            connection = await self._create_connection(
-                account.email,
-                smtp_host,
-                smtp_port,
-                xoauth2_string,
-                source_ip=source_ip
-            )
-
-            # ✅ PERF FIX #6: Ensure account has idle/busy pools
-            async with self._dict_lock:
-                if account.email not in self.locks:
-                    self.locks[account.email] = asyncio.Lock()
-                    self.pool_idle[account.email] = deque()
-                    self.pool_busy[account.email] = set()
-                    # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
-
-            # Add to pool (with lock)
-            lock = self.locks[account.email]
-            async with lock:
-                pool_idle = self.pool_idle[account.email]
-
-                pooled = PooledConnection(
-                    connection=connection,
-                    account_email=account.email,
-                    created_at=datetime.now(UTC),
-                    last_used=datetime.now(UTC),
-                    message_count=0,
-                    is_busy=False  # ✅ Not busy - ready for use!
-                    # ✅ FIX #4: REMOVED semaphore field
-                )
-                # ✅ PERF FIX #6: Add to idle queue (O(1))
-                pool_idle.append(pooled)
-
-            return True
-
-        except Exception as e:
-            # Silently fail individual connections (don't spam logs during prewarm)
-            return False
 
     def refresh_ip_cache(self):
         """
@@ -1106,9 +840,11 @@ class SMTPConnectionPool:
             # Build XOAUTH2 auth string
             xoauth2_string = f"user={account.email}\1auth=Bearer {token.access_token}\1\1"
 
-            # Parse SMTP endpoint
-            smtp_host, smtp_port_str = account.oauth_endpoint.split(':')
-            smtp_port = int(smtp_port_str)
+            # Get SMTP endpoint based on provider (auto-derived, not from account.oauth_endpoint)
+            try:
+                smtp_host, smtp_port = self._get_smtp_endpoint_from_provider(account.provider)
+            except ValueError:
+                return False
 
             # Get source IP if configured
             source_ip = account.ip_address if hasattr(account, 'ip_address') and account.ip_address else None
@@ -1127,12 +863,11 @@ class SMTPConnectionPool:
                 source_ip=source_ip
             )
 
-            # ✅ PERF FIX #6: Ensure account has idle/busy pools
+            # ✅ PERF FIX #6: Ensure account has idle pool
             async with self._dict_lock:
                 if account.email not in self.locks:
                     self.locks[account.email] = asyncio.Lock()
                     self.pool_idle[account.email] = deque()
-                    self.pool_busy[account.email] = set()
                     # ✅ FIX #4: REMOVED semaphore initialization (no fair queueing limit)
 
             # Add to pool
@@ -1164,14 +899,11 @@ class SMTPConnectionPool:
 
     def get_stats(self) -> dict:
         """Get pool statistics"""
-        # ✅ PERF FIX #6: Updated for idle/busy pool structure
         total_idle = sum(len(pool) for pool in self.pool_idle.values())
-        total_busy = sum(len(pool) for pool in self.pool_busy.values())
-        total_connections = total_idle + total_busy
+        total_connections = total_idle
 
         return {
             'total_connections': total_connections,
-            'busy_connections': total_busy,
             'idle_connections': total_idle,
             'accounts_in_pool': len(self.locks),
             **self.stats
