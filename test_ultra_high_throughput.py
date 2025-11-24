@@ -106,14 +106,15 @@ class UltraHighThroughputTester:
             'errors': {}
         }
 
-    async def send_email_fast(self, email_index: int) -> Tuple[bool, float]:
+    async def send_email_fast(self, email_index: int) -> Tuple[bool, float, str]:
         """
         Send email as fast as possible with minimal overhead
 
         Returns:
-            Tuple of (success: bool, latency: float)
+            Tuple of (success: bool, latency: float, error_msg: str)
         """
         start_time = time.time()
+        error_msg = ""
 
         try:
             # Connect to proxy or provider
@@ -131,26 +132,40 @@ class UltraHighThroughputTester:
 
                 # For real provider, need TLS and real auth
                 if self.use_real_provider:
-                    await smtp.starttls()
+                    try:
+                        await smtp.starttls()
+                    except Exception as e:
+                        latency = time.time() - start_time
+                        return False, latency, f"STARTTLS failed: {str(e)[:50]}"
+
                     await smtp.ehlo()
                     try:
                         await smtp.login(self.from_email, password)
-                    except Exception:
+                    except Exception as e:
                         latency = time.time() - start_time
-                        return False, latency
+                        error_msg = str(e)[:100]
+                        return False, latency, error_msg
 
                 # Minimal email (fastest possible)
                 message = f"From: {self.from_email}\r\nTo: {self.to_email}\r\nSubject: T#{email_index}\r\n\r\nTest"
 
-                await smtp.sendmail(self.from_email, [self.to_email], message)
-                await smtp.quit()
+                try:
+                    await smtp.sendmail(self.from_email, [self.to_email], message)
+                except Exception as e:
+                    latency = time.time() - start_time
+                    return False, latency, f"SEND failed: {str(e)[:50]}"
+
+                try:
+                    await smtp.quit()
+                except Exception:
+                    pass  # Ignore quit errors
 
             latency = time.time() - start_time
-            return True, latency
+            return True, latency, ""
 
-        except Exception:
+        except Exception as e:
             latency = time.time() - start_time
-            return False, latency
+            return False, latency, str(e)[:100]
 
     async def run_ultra_high_throughput_test(self):
         """Execute ultra-high throughput test"""
@@ -201,7 +216,7 @@ class UltraHighThroughputTester:
                     results = await asyncio.gather(*batch_tasks, return_exceptions=False)
 
                     # Process results
-                    for success, latency in results:
+                    for success, latency, error_msg in results:
                         self.stats['total_latency'] += latency
                         self.stats['latencies'].append(latency)
 
@@ -209,6 +224,9 @@ class UltraHighThroughputTester:
                             self.stats['successful'] += 1
                         else:
                             self.stats['failed'] += 1
+                            # Track error types
+                            error_type = error_msg.split(':')[0] if error_msg else 'Unknown'
+                            self.stats['errors'][error_type] = self.stats['errors'].get(error_type, 0) + 1
 
                         # Update min/max
                         self.stats['min_latency'] = min(self.stats['min_latency'], latency)
@@ -282,6 +300,12 @@ class UltraHighThroughputTester:
             logger.info(f"  P95: {p95:.3f}s ({p95*1000:.1f}ms)")
             logger.info(f"  P99: {p99:.3f}s ({p99*1000:.1f}ms)")
 
+        # Error breakdown
+        if self.stats['errors']:
+            logger.warning(f"\nERROR BREAKDOWN ({self.stats['failed']} total):")
+            for error_type, count in sorted(self.stats['errors'].items(), key=lambda x: x[1], reverse=True):
+                logger.warning(f"  {error_type}: {count}")
+
         # Save results
         results_file = f"ultra_throughput_results_{int(time.time())}.json"
         self._save_results(results_file)
@@ -317,7 +341,8 @@ class UltraHighThroughputTester:
                     'p50_seconds': sorted(self.stats['latencies'])[len(self.stats['latencies']) // 2] if self.stats['latencies'] else 0,
                     'p95_seconds': sorted(self.stats['latencies'])[int(len(self.stats['latencies']) * 0.95)] if self.stats['latencies'] else 0,
                     'p99_seconds': sorted(self.stats['latencies'])[int(len(self.stats['latencies']) * 0.99)] if self.stats['latencies'] else 0,
-                }
+                },
+                'errors': self.stats['errors']
             }
         }
 
