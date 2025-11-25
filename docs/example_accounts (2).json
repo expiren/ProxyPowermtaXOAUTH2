@@ -1,0 +1,17 @@
+[
+  {
+    "account_id": "gmail_01",
+    "email": "your-email@gmail.com",
+    "provider": "gmail",
+    "client_id": "YOUR_GMAIL_CLIENT_ID.apps.googleusercontent.com",
+    "refresh_token": "YOUR_GMAIL_REFRESH_TOKEN"
+  },
+  {
+    "account_id": "outlook_01",
+    "email": "your-email@outlook.com",
+    "provider": "outlook",
+    "ip_address": "OPTIONAL_DEDICATED_IP",
+    "client_id": "YOUR_OUTLOOK_CLIENT_ID",
+    "refresh_token": "YOUR_OUTLOOK_REFRESH_TOKEN"
+  }
+]

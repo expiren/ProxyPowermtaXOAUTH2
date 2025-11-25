@@ -3,7 +3,6 @@
 from src.utils.http_pool import HTTPSessionPool
 from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerManager, CircuitBreakerState
 from src.utils.retry import retry_async, retry_on_exception, RetryConfig
-from src.utils.rate_limiter import RateLimiter, TokenBucket
 from src.utils.network import (
     get_server_ips,
     get_public_server_ips,
@@ -20,7 +19,6 @@ from src.utils.exceptions import (
     DuplicateAccount,
     ProxyConnectionError,
     CircuitBreakerOpen,
-    RateLimitExceeded,
     ProxyTimeoutError,
 )
 
@@ -35,9 +33,6 @@ __all__ = [
     'retry_async',
     'retry_on_exception',
     'RetryConfig',
-    # Rate limiting
-    'RateLimiter',
-    'TokenBucket',
     # Network utilities
     'get_server_ips',
     'get_public_server_ips',
@@ -53,6 +48,5 @@ __all__ = [
     'DuplicateAccount',
     'ProxyConnectionError',
     'CircuitBreakerOpen',
-    'RateLimitExceeded',
     'ProxyTimeoutError',
 ]

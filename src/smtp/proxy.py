@@ -10,7 +10,6 @@ from src.oauth2.manager import OAuth2Manager
 from src.accounts.manager import AccountManager
 from src.smtp.handler import SMTPProxyHandler
 from src.smtp.upstream import UpstreamRelay
-from src.utils.rate_limiter import RateLimiter
 from src.admin.server import AdminServer
 
 logger = logging.getLogger('xoauth2_proxy')
@@ -55,15 +54,10 @@ class SMTPProxyServer:
             f"http_pool: {http_pool_config['total_connections']} total connections)"
         )
 
-        # ✅ Initialize RateLimiter (uses provider defaults, per-account overrides applied at runtime)
-        # Default to Gmail's limit (10k messages/hour) as conservative baseline
-        gmail_config = self.proxy_config.get_provider_config('gmail')
-        default_messages_per_hour = gmail_config.rate_limiting.messages_per_hour
-        self.rate_limiter = RateLimiter(messages_per_hour=default_messages_per_hour)
-        logger.info(f"[SMTPProxyServer] RateLimiter initialized (default: {default_messages_per_hour} msg/hour)")
-
         # ✅ Initialize UpstreamRelay with provider-specific connection pool settings
         # Use Gmail defaults as baseline (most common provider)
+        # ✅ REMOVED: RateLimiter (no longer needed)
+        gmail_config = self.proxy_config.get_provider_config('gmail')
         pool_config = gmail_config.connection_pool
         self.upstream_relay = UpstreamRelay(
             self.oauth_manager,
@@ -71,7 +65,6 @@ class SMTPProxyServer:
             max_messages_per_connection=pool_config.max_messages_per_connection,
             connection_max_age=pool_config.connection_max_age_seconds,  # ✅ From config
             connection_idle_timeout=pool_config.connection_idle_timeout_seconds,  # ✅ From config
-            rate_limiter=self.rate_limiter,  # ✅ Pass rate limiter for per-account limits
             smtp_config=self.proxy_config.global_config.smtp,  # ✅ Pass SMTP config for IP binding
             pool_config=pool_config,  # ✅ NEW: Pass pool config for prewarm/rewarm settings
             account_manager=self.account_manager  # ✅ NEW: Pass account_manager for periodic rewarm
@@ -105,18 +98,30 @@ class SMTPProxyServer:
         # Initialize upstream relay with connection pool
         await self.upstream_relay.initialize()
 
-        # ✅ NEW: Adaptive pre-warming - scales with actual traffic patterns
-        # Instead of pre-warming fixed percentage for all accounts:
-        # - Only pre-warms accounts that sent >threshold messages in last hour
-        # - Scales connections with per-account traffic (1-10 connections per account)
-        # - Inactive accounts get 0 pre-warmed connections (saves resources)
-        # - Burst overflow handled by dynamic connection creation
+        # ✅ NEW: Pre-cache all OAuth2 tokens on startup
+        # This ensures the first message doesn't wait for token refresh (200-500ms)
+        # Tokens are cached with 3600-second TTL, so they remain valid for subsequent messages
+        # Trade: Startup takes longer (250ms × N accounts) but first message is instant
         if num_accounts > 0:
             accounts = await self.account_manager.get_all()
-            await self.upstream_relay.connection_pool.prewarm_adaptive(
-                accounts,
-                oauth_manager=self.oauth_manager
-            )
+            logger.info("[SMTPProxyServer] Pre-populating OAuth2 token cache on startup...")
+            for account in accounts:
+                try:
+                    await self.oauth_manager.get_or_refresh_token(account)
+                    logger.debug(f"[SMTPProxyServer] Cached token for {account.email}")
+                except Exception as e:
+                    logger.warning(
+                        f"[SMTPProxyServer] Failed to cache token for {account.email}: {e}"
+                    )
+            logger.info("[SMTPProxyServer] OAuth2 token cache pre-populated")
+
+            # ✅ NEW: Pre-warm SMTP connections at startup
+            # This creates 5-10 connections per account in parallel during startup
+            # Eliminates 200-300ms delay for first message to each account
+            # Expected improvement: From 4+ seconds to ~1 second for 10 concurrent messages
+            logger.info("[SMTPProxyServer] Pre-warming SMTP connections...")
+            await self.upstream_relay.connection_pool.prewarm(accounts, self.oauth_manager)
+            logger.info("[SMTPProxyServer] SMTP connection pre-warming complete")
 
         # REMOVED: periodic rewarm background task
         # Lazy connection refresh handles idle timeout detection:
@@ -190,7 +195,7 @@ class SMTPProxyServer:
                 f"[SMTPProxyServer] Reload complete - {num_accounts} accounts loaded with updated provider settings"
             )
             logger.warning(
-                "[SMTPProxyServer] NOTE: Global defaults (UpstreamRelay, RateLimiter baseline) "
+                "[SMTPProxyServer] NOTE: Global defaults (UpstreamRelay settings) "
                 "were NOT updated - per-account settings from reloaded config WILL be used"
             )
             return num_accounts
@@ -222,7 +227,7 @@ class SMTPProxyServer:
                     oauth_manager=self.oauth_manager,
                     upstream_relay=self.upstream_relay,
                     dry_run=self.settings.dry_run,
-                    global_concurrency_limit=self.settings.global_concurrency_limit,
+                    # ✅ REMOVED: global_concurrency_limit (no longer needed - using per-account limits)
                     # ✅ REMOVED: global_semaphore (no longer needed after FIX #1)
                     backpressure_queue_size=self.proxy_config.global_config.backpressure_queue_size
                 )

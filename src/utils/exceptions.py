@@ -36,11 +36,6 @@ class CircuitBreakerOpen(ProxyException):
     pass
 
 
-class RateLimitExceeded(ProxyException):
-    """Rate limit exceeded"""
-    pass
-
-
 class ProxyTimeoutError(ProxyException):
     """Proxy operation timeout (renamed to avoid shadowing built-in TimeoutError)"""
     pass

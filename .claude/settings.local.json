@@ -23,7 +23,13 @@
       "Bash(git config:*)",
       "Bash(git add:*)",
       "Bash(del nul 2)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cd:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nTEST: Add comprehensive SMTP load testing tools\n\nCreated production-grade load testing suite to benchmark proxy performance:\n\n✅ test_smtp_load.py\n   - Core load testing tool\n   - Sends concurrent SMTP emails to proxy on port 2525\n   - Measures: throughput, latency, success rate\n   - Calculates: min/max/avg/p50/p95/p99 latency\n   - Saves results to JSON for analysis\n   - Supports concurrent connections from 1-1000+\n\n✅ test_smtp_scenarios.py\n   - Predefined test scenarios for common use cases\n   - Scenarios: quick, baseline, moderate, stress, sustained, peak\n   - Before/after comparison mode for measuring optimization impact\n   - Auto-confirms for long-running tests with --verbose flag\n\n✅ LOAD_TESTING_GUIDE.md\n   - Comprehensive testing documentation\n   - Examples for each scenario\n   - Troubleshooting guide\n   - Performance tuning tips\n   - Understanding and comparing results\n\n✅ QUICK_TEST_REFERENCE.md\n   - TL;DR version - get started in 5 minutes\n   - Common commands and issues\n   - Before/after comparison quick start\n   - Key metrics interpretation\n\nTest Capabilities:\n- Simulates real email flow A→Z (EHLO, AUTH, MAIL, RCPT, DATA, QUIT)\n- Handles concurrent connections with asyncio\n- Measures requests per second and per minute\n- Calculates latency distribution (P50, P95, P99)\n- Tests with invalid OAuth2 credentials (proxy handles validation)\n- Supports multiple test accounts\n- Generates JSON results for analysis\n\nExpected Results:\n- Before Phase 1: 15-30 req/s\n- After Phase 1: 50-150 req/s (2-5x improvement)\n- After Phase 2: 200+ req/s (10x+ improvement)\n\nUsage Examples:\n  python test_smtp_load.py --num-emails 100 --concurrent 10\n  python test_smtp_scenarios.py --scenario quick\n  python test_smtp_scenarios.py --scenario compare\n\nGenerated with Claude Code\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git commit:*)",
+      "Bash(timeout 30 python:*)",
+      "Bash(timeout 10 python3:*)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": []
