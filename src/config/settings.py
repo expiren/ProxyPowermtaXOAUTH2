@@ -26,6 +26,7 @@ class Settings:
 
     # Features
     dry_run: bool = False
+    admin_only: bool = False  # Run admin HTTP server only (no SMTP proxy)
 
     @classmethod
     def from_env(cls) -> 'Settings':
@@ -37,6 +38,7 @@ class Settings:
             admin_port=int(os.getenv('XOAUTH2_ADMIN_PORT', 9090)),
             global_concurrency_limit=int(os.getenv('XOAUTH2_GLOBAL_CONCURRENCY', 100)),
             dry_run=os.getenv('XOAUTH2_DRY_RUN', 'false').lower() == 'true',
+            admin_only=os.getenv('XOAUTH2_ADMIN_ONLY', 'false').lower() == 'true',
         )
 
     @staticmethod

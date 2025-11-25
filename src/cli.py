@@ -82,6 +82,12 @@ Examples:
         help='Enable dry-run mode (test connections without sending messages)'
     )
 
+    parser.add_argument(
+        '--admin-only',
+        action='store_true',
+        help='Run admin HTTP server only (no SMTP proxy server). Useful when using external relay (e.g., PowerMtaRelay)'
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -101,4 +107,5 @@ def create_settings(args: argparse.Namespace) -> Settings:
         admin_port=args.admin_port,
         global_concurrency_limit=args.global_concurrency,
         dry_run=args.dry_run,
+        admin_only=args.admin_only,
     )

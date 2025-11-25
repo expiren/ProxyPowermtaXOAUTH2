@@ -212,6 +212,14 @@ class SMTPProxyServer:
             # Start admin HTTP server
             await self.admin_server.start()
 
+            # ✅ NEW: Admin-only mode (no SMTP proxy server)
+            if self.settings.admin_only:
+                logger.info("[SMTPProxyServer] Running in ADMIN-ONLY mode (no SMTP proxy)")
+                logger.info("[SMTPProxyServer] Use admin API to manage accounts")
+                # Keep the admin server running indefinitely
+                await asyncio.Event().wait()
+                return
+
             logger.info(
                 f"Starting XOAUTH2 proxy on {self.settings.host}:{self.settings.port} "
                 f"({num_accounts} accounts)"
