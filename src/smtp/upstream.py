@@ -25,13 +25,11 @@ class UpstreamRelay:
         max_messages_per_connection: int = 100,
         connection_max_age: int = 300,  # ✅ Configurable connection max age (seconds)
         connection_idle_timeout: int = 60,  # ✅ Configurable idle timeout (seconds)
-        rate_limiter = None,  # ✅ Optional RateLimiter for per-account rate limiting
         smtp_config: Optional['SMTPConfig'] = None,  # ✅ SMTP config for IP binding
         pool_config = None,  # ✅ NEW: ConnectionPoolConfig for prewarm settings
         account_manager = None  # ✅ NEW: AccountManager for periodic rewarm
     ):
         self.oauth_manager = oauth_manager
-        self.rate_limiter = rate_limiter  # ✅ Store rate limiter
         self.account_manager = account_manager  # ✅ NEW: Store account_manager for rewarm loop
 
         # Create SMTP connection pool (fully async, no thread pool needed!)
@@ -52,8 +50,7 @@ class UpstreamRelay:
             f"[UpstreamRelay] Initialized with connection pooling "
             f"(max_conn_per_account={max_connections_per_account}, "
             f"max_msg_per_conn={max_messages_per_connection}, "
-            f"max_age={connection_max_age}s, idle_timeout={connection_idle_timeout}s, "
-            f"rate_limiting={'enabled' if rate_limiter else 'disabled'})"
+            f"max_age={connection_max_age}s, idle_timeout={connection_idle_timeout}s)"
         )
 
     async def initialize(self):
@@ -67,6 +64,27 @@ class UpstreamRelay:
     # - When acquire() finds idle connection (>idle_timeout seconds)
     # - Creates new connection on-demand (not in background task)
     # - No background overhead, only when needed for actual messages
+
+    def _get_smtp_endpoint(self, provider: str) -> Tuple[str, int]:
+        """
+        Get SMTP endpoint (host, port) based on provider type.
+
+        Args:
+            provider: 'gmail' or 'outlook'
+
+        Returns:
+            Tuple of (host, port)
+
+        Raises:
+            ValueError: If provider unknown or oauth_endpoint empty
+        """
+        # Try to get from provider config first
+        if provider == 'gmail':
+            return ('smtp.gmail.com', 587)
+        elif provider == 'outlook':
+            return ('smtp.office365.com', 587)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
 
     async def send_message(
         self,
@@ -98,16 +116,7 @@ class UpstreamRelay:
         # start_time = time.time()
 
         try:
-            # ✅ Check rate limit BEFORE doing any work (token refresh, connection pool, etc.)
-            if self.rate_limiter:
-                try:
-                    # Acquire token from rate limiter with per-account settings
-                    # (raises RateLimitExceeded if over limit)
-                    await self.rate_limiter.acquire(account.email, account=account)
-                except Exception as e:
-                    # Rate limit exceeded - reject with temporary failure
-                    logger.warning(f"[{account.email}] Rate limit exceeded: {e}")
-                    return (False, 451, "4.4.4 Rate limit exceeded, try again later")
+            # ✅ REMOVED: Rate limiter (no longer needed - relying on connection pool and per-account limits)
 
             # Refresh token if needed
             token = await self.oauth_manager.get_or_refresh_token(account)
@@ -126,9 +135,15 @@ class UpstreamRelay:
             # Build XOAUTH2 auth string (RAW, not base64 - pool will encode it)
             xoauth2_string = f"user={mail_from}\1auth=Bearer {token.access_token}\1\1"
 
-            # Parse SMTP endpoint
-            smtp_host, smtp_port_str = account.oauth_endpoint.split(':')
-            smtp_port = int(smtp_port_str)
+            # Get SMTP endpoint based on provider (auto-derived, not from account.oauth_endpoint)
+            try:
+                smtp_host, smtp_port = self._get_smtp_endpoint(account.provider)
+            except ValueError as e:
+                logger.error(f"[{account.email}] {e}")
+                return (False, 550, "5.7.1 Permanent failure")
+            except Exception as e:
+                logger.error(f"[{account.email}] Failed to get SMTP endpoint: {e}")
+                return (False, 550, "5.7.1 Permanent failure")
 
             # Acquire connection from pool (reuses existing authenticated connections!)
             # ✅ Pass account object for per-account connection pool settings

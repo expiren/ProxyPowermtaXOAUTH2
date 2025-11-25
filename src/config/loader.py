@@ -59,34 +59,47 @@ class ConfigLoader:
                     if not k.startswith('_')
                 }
 
-                # Validate oauth_endpoint format (must be host:port with valid numeric port)
-                oauth_endpoint = filtered_data.get('oauth_endpoint', '')
-                if not oauth_endpoint or ':' not in oauth_endpoint:
-                    raise ConfigError(
-                        f"Invalid oauth_endpoint format (must be host:port): "
-                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
-                    )
-
-                # Validate port is numeric and in valid range
-                parts = oauth_endpoint.split(':')
-                if len(parts) != 2:
-                    raise ConfigError(
-                        f"Invalid oauth_endpoint format (must have exactly one colon): "
-                        f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
-                    )
-
-                try:
-                    port = int(parts[1])
-                    if not (1 <= port <= 65535):
+                # Auto-populate oauth_token_url based on provider if not specified
+                provider = filtered_data.get('provider', '').lower()
+                if not filtered_data.get('oauth_token_url'):
+                    if provider == 'gmail':
+                        filtered_data['oauth_token_url'] = 'https://oauth2.googleapis.com/token'
+                    elif provider == 'outlook':
+                        filtered_data['oauth_token_url'] = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+                    else:
                         raise ConfigError(
-                            f"Port must be between 1 and 65535: "
-                            f"{port} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                            f"Cannot auto-populate oauth_token_url: unknown provider '{provider}' for {filtered_data.get('email', 'unknown')}"
                         )
-                except ValueError:
-                    raise ConfigError(
-                        f"Port must be numeric: "
-                        f"{parts[1]} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
-                    )
+
+                # oauth_endpoint is deprecated, but validate it if provided (for backward compatibility)
+                oauth_endpoint = filtered_data.get('oauth_endpoint', '')
+                if oauth_endpoint:
+                    # Validate port is numeric and in valid range
+                    if ':' not in oauth_endpoint:
+                        raise ConfigError(
+                            f"Invalid oauth_endpoint format (must be host:port): "
+                            f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                        )
+
+                    parts = oauth_endpoint.split(':')
+                    if len(parts) != 2:
+                        raise ConfigError(
+                            f"Invalid oauth_endpoint format (must have exactly one colon): "
+                            f"{oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                        )
+
+                    try:
+                        port = int(parts[1])
+                        if not (1 <= port <= 65535):
+                            raise ConfigError(
+                                f"Port must be between 1 and 65535: "
+                                f"{port} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                            )
+                    except ValueError:
+                        raise ConfigError(
+                            f"Port must be numeric: "
+                            f"{parts[1]} in {oauth_endpoint} for account {filtered_data.get('email', 'unknown')}"
+                        )
 
                 account = AccountConfig(**filtered_data)
 

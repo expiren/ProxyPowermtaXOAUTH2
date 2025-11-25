@@ -14,14 +14,24 @@ class AccountConfig:
     """Single account configuration with per-account overrides"""
     account_id: str
     email: str
-    ip_address: str
-    vmta_name: str
     provider: str  # 'gmail' or 'outlook'
     client_id: str
     refresh_token: str
-    oauth_endpoint: str  # SMTP endpoint (e.g., smtp.office365.com:587)
-    oauth_token_url: str  # OAuth2 token endpoint (provider-specific)
-    client_secret: str = ""  # Optional for some Outlook OAuth flows
+
+    # Required for OAuth2 (auto-derived from provider if not specified)
+    oauth_token_url: str = ""  # OAuth2 token endpoint (provider-specific)
+
+    # Optional for some Outlook OAuth flows
+    client_secret: str = ""
+
+    # Optional: Used only if source IP binding is enabled
+    ip_address: str = ""
+
+    # Optional: PowerMTA integration (not used by proxy, informational only)
+    vmta_name: str = ""
+
+    # Deprecated/Legacy: No longer needed (kept for backward compatibility)
+    oauth_endpoint: str = ""  # SMTP endpoint auto-derived from provider
 
     # Concurrency limits (legacy, kept for backward compatibility)
     max_concurrent_messages: int = 10

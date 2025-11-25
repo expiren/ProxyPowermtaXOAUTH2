@@ -44,8 +44,8 @@
     "oauth2": {
       "_description": "OAuth2 token management settings",
 
-      "token_refresh_buffer_seconds": 300,
-      "_token_refresh_buffer_seconds_doc": "Refresh tokens this many seconds before expiry (default: 300 = 5 minutes, prevents expiry during use)",
+      "token_refresh_buffer_seconds": 60,
+      "_token_refresh_buffer_seconds_doc": "Refresh tokens this many seconds before expiry (default: 60 = 1 minute, prevents expiry during use)",
 
       "token_cache_ttl_seconds": 3300,
       "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 3300 = 55 min, matches token lifetime with 5-min buffer)",
@@ -145,24 +145,6 @@
         "connection_idle_timeout_seconds": 30,
         "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds. Closes idle connections to free resources.",
 
-        "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED. Scales connections based on actual traffic.",
-
-        "prewarm_min_connections": 5,
-        "_prewarm_min_connections_doc": "Minimum connections per account: 5 (same as Outlook).",
-
-        "prewarm_max_connections": 40,
-        "_prewarm_max_connections_doc": "Maximum connections per account: 40 (higher than Outlook due to Gmail's generous limits).",
-
-        "prewarm_min_message_threshold": 100,
-        "_prewarm_min_message_threshold_doc": "Pre-warming threshold: 100 messages/hour (same as Outlook).",
-
-        "prewarm_messages_per_connection": 15,
-        "_prewarm_messages_per_connection_doc": "Tuning: 15 messages per connection (same as Outlook). Formula: connections = msgs_per_hour / 60 / 15.",
-
-        "prewarm_concurrent_tasks": 500,
-        "_prewarm_concurrent_tasks_doc": "Concurrent connection creations: 500 (same as Outlook).",
-
         "idle_connection_reuse_timeout": 120,
         "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
       },
@@ -243,24 +225,6 @@
         "connection_idle_timeout_seconds": 30,
         "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds (unchanged). Closes idle connections to free resources.",
 
-        "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED (unchanged). Scales connections based on actual traffic, not fixed counts.",
-
-        "prewarm_min_connections": 5,
-        "_prewarm_min_connections_doc": "OPTIMIZED: 5 minimum connections per account (was 1000). Ensures <200ms startup latency while avoiding resource waste. With 500 accounts = 2500 connections minimum (manageable).",
-
-        "prewarm_max_connections": 30,
-        "_prewarm_max_connections_doc": "OPTIMIZED: 30 maximum connections per account (was 2000). Scales up for high-volume accounts. With 500 accounts = 15000 maximum connections. Formula: (50k msgs/min / 500 accounts / 60 sec) / 20 msgs_per_sec_per_connection ≈ 8 connections; 30 is safe headroom.",
-
-        "prewarm_min_message_threshold": 100,
-        "_prewarm_min_message_threshold_doc": "OPTIMIZED: 100 messages/hour threshold (was 1000). Start pre-warming for accounts that sent >100 msgs in last hour. Lower threshold activates pre-warming for more accounts.",
-
-        "prewarm_messages_per_connection": 15,
-        "_prewarm_messages_per_connection_doc": "OPTIMIZED: 15 msgs per connection (was 1000). Tuning: expects ~15 messages before needing another connection. Formula: connections_needed = msgs_per_hour / 60 / 15. For 50k msgs/hour account: 50000 / 60 / 15 ≈ 55 connections (capped at prewarm_max_connections: 30).",
-
-        "prewarm_concurrent_tasks": 500,
-        "_prewarm_concurrent_tasks_doc": "OPTIMIZED: 500 concurrent connection creations (was 1000). Balances startup speed with memory usage. With 500 accounts × 5-30 connections = 2500-15000 connections total.",
-
         "idle_connection_reuse_timeout": 120,
         "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (unchanged). Detects and replaces stale connections on-demand."
       },
@@ -335,24 +299,6 @@
         "connection_idle_timeout_seconds": 60,
         "_connection_idle_timeout_seconds_doc": "Idle timeout: 60 seconds (conservative, closes idle connections).",
 
-        "adaptive_prewarm_enabled": true,
-        "_adaptive_prewarm_enabled_doc": "Adaptive pre-warming: ENABLED (scales based on traffic).",
-
-        "prewarm_min_connections": 2,
-        "_prewarm_min_connections_doc": "Minimum connections per account: 2 (conservative for unknown providers).",
-
-        "prewarm_max_connections": 15,
-        "_prewarm_max_connections_doc": "Maximum connections per account: 15 (conservative, prevents resource waste).",
-
-        "prewarm_min_message_threshold": 100,
-        "_prewarm_min_message_threshold_doc": "Pre-warming threshold: 100 messages/hour (activate for accounts sending >100 msgs/hour).",
-
-        "prewarm_messages_per_connection": 10,
-        "_prewarm_messages_per_connection_doc": "Tuning: 10 messages per connection (conservative). Formula: connections = msgs_per_hour / 60 / 10.",
-
-        "prewarm_concurrent_tasks": 100,
-        "_prewarm_concurrent_tasks_doc": "Concurrent connection creations: 100 (conservative, prevents memory spike).",
-
         "idle_connection_reuse_timeout": 120,
         "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
       },
@@ -393,7 +339,6 @@
     "5": "Send SIGHUP signal (Unix) to hot-reload configuration without restarting: kill -HUP <pid>",
     "6": "Windows does not support SIGHUP - restart required for config changes",
     "7": "See docs/DEPLOYMENT_GUIDE.md for production configuration recommendations",
-    "8": "ADAPTIVE PRE-WARMING (v2.0): Connections now scale based on actual traffic, not fixed percentages. See 'adaptive_prewarm_enabled' and 'prewarm_max_connections' fields",
-    "9": "DEPRECATED FIELDS (kept for backward compatibility but not used): prewarm_percentage, periodic_rewarm_enabled, periodic_rewarm_interval_seconds, rewarm_concurrent_tasks in src/config/proxy_config.py"
+    "8": "Connections are created on-demand as messages arrive (no pre-warming). Connection pool is lazy-initialized."
   }
 }
