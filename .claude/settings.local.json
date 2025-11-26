@@ -29,7 +29,8 @@
       "Bash(git commit:*)",
       "Bash(timeout 30 python:*)",
       "Bash(timeout 10 python3:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
