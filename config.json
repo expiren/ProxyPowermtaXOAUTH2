@@ -3,62 +3,20 @@
   "_version": "2.0",
   "_description": "Global settings and provider defaults. Account credentials are in accounts.json (separate file).",
 
-  "_documentation": {
-    "config_file": "This file (config.json) contains global settings and provider defaults",
-    "accounts_file": "accounts.json contains account credentials (OAuth2, emails, etc.)",
-    "cli_overrides": "CLI arguments (--host, --port, etc.) override these settings",
-    "hot_reload": "Send SIGHUP signal (Unix) to reload configuration without restart"
-  },
-
   "global": {
     "_description": "Global proxy settings that apply to all accounts",
 
-    "concurrency": {
-      "_description": "Concurrency and queue settings for the entire proxy",
-      "global_concurrency_limit": 15000,
-      "_global_concurrency_limit_doc": "Maximum concurrent messages across all accounts (OPTIMIZED: 15000 for 500+ Outlook accounts at 50k+ msg/min. Formula: target_msgs_per_min / 60 / safety_factor = 50000 / 60 / 0.056 ≈ 15000)",
+    "backpressure_queue_size": 10000,
+    "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (OPTIMIZED: 10000 for burst handling with 500+ accounts)",
 
-      "backpressure_queue_size": 10000,
-      "_backpressure_queue_size_doc": "Maximum queued messages before rejecting new connections (OPTIMIZED: 10000 for burst handling with 500+ accounts)",
-
-      "connection_backlog": 8192,
-      "_connection_backlog_doc": "TCP backlog for incoming SMTP connections (OPTIMIZED: 8192 for high-volume, matches Linux max_listen_backlog)"
-    },
-
-    "timeouts": {
-      "_description": "Global timeout settings (in seconds)",
-
-      "oauth2_timeout": 10,
-      "_oauth2_timeout_doc": "Timeout for OAuth2 token refresh requests to Google/Microsoft (default: 10 seconds)",
-
-      "connection_acquire_timeout": 5,
-      "_connection_acquire_timeout_doc": "[DEPRECATED - Not used] Timeout for acquiring connection from pool (default: 5 seconds, replaced by per-connection timeouts)",
-
-      "smtp_command_timeout": 300,
-      "_smtp_command_timeout_doc": "Timeout for SMTP commands (default: 300 seconds / 5 minutes)",
-
-      "smtp_data_timeout": 600,
-      "_smtp_data_timeout_doc": "Timeout for DATA command (message upload) (default: 600 seconds / 10 minutes)"
-    },
-
-    "oauth2": {
-      "_description": "OAuth2 token management settings",
-
-      "token_refresh_buffer_seconds": 60,
-      "_token_refresh_buffer_seconds_doc": "Refresh tokens this many seconds before expiry (default: 60 = 1 minute, prevents expiry during use)",
-
-      "token_cache_ttl_seconds": 3300,
-      "_token_cache_ttl_seconds_doc": "Cache OAuth2 access tokens for this many seconds (default: 3300 = 55 min, matches token lifetime with 5-min buffer)",
-
-      "token_default_lifetime_seconds": 3600,
-      "_token_default_lifetime_seconds_doc": "Default token lifetime if provider doesn't specify (default: 3600 = 1 hour)"
-    },
+    "oauth2_timeout": 10,
+    "_oauth2_timeout_doc": "Timeout for OAuth2 token refresh requests to Google/Microsoft (default: 10 seconds)",
 
     "http_pool": {
       "_description": "HTTP connection pool for OAuth2 API requests",
 
       "total_connections": 5000,
-      "_total_connections_doc": "Maximum total HTTP connections across all hosts (default: 500)",
+      "_total_connections_doc": "Maximum total HTTP connections across all hosts (default: 5000)",
 
       "connections_per_host": 100,
       "_connections_per_host_doc": "Maximum connections per host (Google/Microsoft OAuth2 endpoints) (default: 100)",
@@ -67,26 +25,11 @@
       "_dns_cache_ttl_seconds_doc": "DNS cache TTL in seconds (default: 300 = 5 minutes)",
 
       "connect_timeout_seconds": 5,
-      "_connect_timeout_seconds_doc": "Timeout for establishing HTTP connection (default: 5 seconds)",
-
-      "max_retries": 3,
-      "_max_retries_doc": "Maximum HTTP request retries on transient failures (default: 3)"
+      "_connect_timeout_seconds_doc": "Timeout for establishing HTTP connection (default: 5 seconds)"
     },
 
     "smtp": {
       "_description": "SMTP protocol settings",
-
-      "server_hostname": "xoauth2-proxy",
-      "_server_hostname_doc": "SMTP server name advertised in EHLO responses (default: xoauth2-proxy)",
-
-      "max_message_size": 52428800,
-      "_max_message_size_doc": "Maximum message size in bytes (default: 52428800 = 50 MB)",
-
-      "max_recipients": 1000,
-      "_max_recipients_doc": "Maximum recipients per message (default: 1000)",
-
-      "max_line_length": 1000,
-      "_max_line_length_doc": "Maximum SMTP command line length (default: 1000, RFC 5321 recommends 512)",
 
       "use_source_ip_binding": true,
       "_use_source_ip_binding_doc": "Enable source IP binding for outbound SMTP connections (default: true, allows using multiple server IPs)",
@@ -96,22 +39,6 @@
 
       "use_ipv6": false,
       "_use_ipv6_doc": "Use IPv6 addresses for sending (default: false, most providers work better with IPv4)"
-    },
-
-    "logging": {
-      "_description": "Logging configuration",
-
-      "level": "INFO",
-      "_level_doc": "Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)",
-
-      "format": "%(asctime)s - %(name)s - %(levelname)s - [%(threadName)s] - %(message)s",
-      "_format_doc": "Log message format (Python logging format)",
-
-      "log_file_override": null,
-      "_log_file_override_doc": "Override default log file path (default: null, uses platform-specific path)",
-
-      "console_output": true,
-      "_console_output_doc": "Enable console (stdout) logging in addition to file (default: true)"
     }
   },
 
@@ -119,200 +46,16 @@
     "_description": "Provider-specific defaults for Gmail, Outlook, and fallback",
 
     "gmail": {
-      "_description": "Gmail (smtp.gmail.com:587) default settings - NOTE: Optimized for Outlook; adjust if using Gmail accounts",
-
-      "oauth_token_url": "https://oauth2.googleapis.com/token",
-      "_oauth_token_url_doc": "OAuth2 token refresh endpoint for Gmail",
-
-      "smtp_endpoint": "smtp.gmail.com:587",
-      "_smtp_endpoint_doc": "Default SMTP endpoint for Gmail accounts",
+      "_description": "Gmail (smtp.gmail.com:587) default settings",
 
       "max_concurrent_messages": 200,
-      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (TUNED: 200, Gmail has more generous rate limits than Outlook. Allows ~10 active connections per account.)",
+      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (TUNED: 200, Gmail has more generous rate limits)",
 
       "connection_pool": {
-        "_description": "Connection pool settings for Gmail accounts",
-
         "max_connections_per_account": 50,
-        "_max_connections_per_account_doc": "Maximum connections per account (same as Outlook for consistency in deployment).",
-
         "max_messages_per_connection": 200,
-        "_max_messages_per_connection_doc": "Messages before closing connection: 200 (good reuse without staleness).",
-
         "connection_max_age_seconds": 300,
-        "_connection_max_age_seconds_doc": "Connection max age: 300 seconds (5 minutes). Gmail connections are stable.",
-
-        "connection_idle_timeout_seconds": 30,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds. Closes idle connections to free resources.",
-
-        "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
-      },
-
-      "rate_limiting": {
-        "_description": "Rate limiting settings for Gmail accounts",
-
-        "enabled": true,
-        "_enabled_doc": "Rate limiting: ENABLED. Protects accounts from throttling.",
-
-        "messages_per_hour": 100000,
-        "_messages_per_hour_doc": "Messages per hour per account: 100000 (Gmail is more generous than Outlook ~10000/day = ~416/hour).",
-
-        "messages_per_minute_per_connection": 50,
-        "_messages_per_minute_per_connection_doc": "Messages per minute per connection: 50 (Gmail ~40-50 msgs/min per connection realistic).",
-
-        "burst_size": 300,
-        "_burst_size_doc": "Burst allowance: 300 (token bucket burst for spiky traffic)."
-      },
-
-      "retry": {
-        "_description": "Retry settings for transient Gmail failures",
-
-        "max_attempts": 2,
-        "_max_attempts_doc": "Maximum retry attempts for failed operations (default: 2)",
-
-        "backoff_factor": 2.0,
-        "_backoff_factor_doc": "Exponential backoff multiplier (default: 2.0, delays: 1s, 2s, 4s, ...)",
-
-        "max_delay_seconds": 30,
-        "_max_delay_seconds_doc": "Maximum retry delay in seconds (default: 30)",
-
-        "jitter_enabled": true,
-        "_jitter_enabled_doc": "Add random jitter to retry delays to avoid thundering herd (default: true)"
-      },
-
-      "circuit_breaker": {
-        "_description": "Circuit breaker to prevent cascading failures to Gmail",
-
-        "enabled": true,
-        "_enabled_doc": "Enable circuit breaker (default: true)",
-
-        "failure_threshold": 5,
-        "_failure_threshold_doc": "Consecutive failures before opening circuit (default: 5)",
-
-        "recovery_timeout_seconds": 60,
-        "_recovery_timeout_seconds_doc": "Seconds before attempting half-open state (default: 60)",
-
-        "half_open_max_calls": 2,
-        "_half_open_max_calls_doc": "Test calls in half-open state before closing circuit (default: 2)"
-      }
-    },
-
-    "outlook": {
-      "_description": "Outlook (smtp.office365.com:587) default settings - OPTIMIZED for 500+ accounts at 50k+ msg/min",
-
-      "oauth_token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-      "_oauth_token_url_doc": "OAuth2 token refresh endpoint for Outlook/Office365",
-
-      "smtp_endpoint": "smtp.office365.com:587",
-      "_smtp_endpoint_doc": "Default SMTP endpoint for Outlook accounts",
-
-      "max_concurrent_messages": 150,
-      "_max_concurrent_messages_doc": "OPTIMIZED: 150 concurrent messages per account (was 100). Allows ~7-8 active SMTP connections per account to saturate (each connection ~20 msgs/min). With 500 accounts, this gives 75k potential concurrent (limited by global_concurrency_limit: 15000 = 30 msgs/min per account on average)",
-
-      "connection_pool": {
-        "_description": "Connection pool settings for Outlook accounts - OPTIMIZED for high-volume",
-
-        "max_connections_per_account": 50,
-        "_max_connections_per_account_doc": "OPTIMIZED: 50 connections per account (was 30). Supports ~150 concurrent messages with ~3 msgs per connection in flight. Prevents per-account bottleneck.",
-
-        "max_messages_per_connection": 150,
-        "_max_messages_per_connection_doc": "Messages before closing connection (unchanged: 150). Good connection reuse without staleness.",
-
-        "connection_max_age_seconds": 240,
-        "_connection_max_age_seconds_doc": "Connection max age: 240 seconds (unchanged). 4-minute TTL prevents connection staleness.",
-
-        "connection_idle_timeout_seconds": 30,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout: 30 seconds (unchanged). Closes idle connections to free resources.",
-
-        "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (unchanged). Detects and replaces stale connections on-demand."
-      },
-
-      "rate_limiting": {
-        "_description": "Rate limiting settings for Outlook accounts - OPTIMIZED for realistic provider limits",
-
-        "enabled": true,
-        "_enabled_doc": "Rate limiting: ENABLED (unchanged). Protects accounts from Outlook throttling.",
-
-        "messages_per_hour": 50000,
-        "_messages_per_hour_doc": "OPTIMIZED: 50000 msgs/hour per account (was 100000). Realistic Outlook limit is ~10000/day per account = ~416/hour sustained. Set to 50000 for aggressive testing; reduce to 10000 in production.",
-
-        "messages_per_minute_per_connection": 30,
-        "_messages_per_minute_per_connection_doc": "OPTIMIZED: 30 msgs/min per connection (was 15). Outlook ~20-30 msgs/min per connection realistic. Allows 2 msgs/sec throughput.",
-
-        "burst_size": 200,
-        "_burst_size_doc": "OPTIMIZED: 200 burst allowance (was 1000). Token bucket burst for spiky traffic. Reduced to prevent one burst from exhausting hourly limits."
-      },
-
-      "retry": {
-        "_description": "Retry settings for transient Outlook failures",
-
-        "max_attempts": 2,
-        "_max_attempts_doc": "Maximum retry attempts for failed operations (default: 2)",
-
-        "backoff_factor": 2.0,
-        "_backoff_factor_doc": "Exponential backoff multiplier (default: 2.0)",
-
-        "max_delay_seconds": 30,
-        "_max_delay_seconds_doc": "Maximum retry delay in seconds (default: 30)",
-
-        "jitter_enabled": true,
-        "_jitter_enabled_doc": "Add random jitter to retry delays (default: true)"
-      },
-
-      "circuit_breaker": {
-        "_description": "Circuit breaker to prevent cascading failures to Outlook",
-
-        "enabled": true,
-        "_enabled_doc": "Enable circuit breaker (default: true)",
-
-        "failure_threshold": 5,
-        "_failure_threshold_doc": "Consecutive failures before opening circuit (default: 5)",
-
-        "recovery_timeout_seconds": 60,
-        "_recovery_timeout_seconds_doc": "Seconds before attempting half-open state (default: 60)",
-
-        "half_open_max_calls": 2,
-        "_half_open_max_calls_doc": "Test calls in half-open state before closing circuit (default: 2)"
-      }
-    },
-
-    "default": {
-      "_description": "Default settings for unknown/custom providers - CONSERVATIVE fallback",
-
-      "max_concurrent_messages": 100,
-      "_max_concurrent_messages_doc": "Maximum concurrent messages per account (DEFAULT: 100, conservative for unknown providers)",
-
-      "connection_pool": {
-        "_description": "Connection pool settings for default/custom providers",
-
-        "max_connections_per_account": 30,
-        "_max_connections_per_account_doc": "Maximum connections per account (DEFAULT: 30, conservative).",
-
-        "max_messages_per_connection": 100,
-        "_max_messages_per_connection_doc": "Messages before closing connection (DEFAULT: 100, conservative reuse).",
-
-        "connection_max_age_seconds": 300,
-        "_connection_max_age_seconds_doc": "Connection max age: 300 seconds (5 minutes, standard).",
-
-        "connection_idle_timeout_seconds": 60,
-        "_connection_idle_timeout_seconds_doc": "Idle timeout: 60 seconds (conservative, closes idle connections).",
-
-        "idle_connection_reuse_timeout": 120,
-        "_idle_connection_reuse_timeout_doc": "Idle reuse timeout: 120 seconds (detects and replaces stale connections)."
-      },
-
-      "rate_limiting": {
-        "_description": "Rate limiting for default/custom providers - CONSERVATIVE",
-        "enabled": true,
-        "_enabled_doc": "Rate limiting: ENABLED.",
-        "messages_per_hour": 10000,
-        "_messages_per_hour_doc": "Messages per hour: 10000 (conservative default).",
-        "messages_per_minute_per_connection": 20,
-        "_messages_per_minute_doc": "Messages per minute per connection: 20 (conservative).",
-        "burst_size": 50,
-        "_burst_size_doc": "Burst allowance: 50 (conservative token bucket)."
+        "connection_idle_timeout_seconds": 30
       },
 
       "retry": {
@@ -325,20 +68,61 @@
       "circuit_breaker": {
         "enabled": true,
         "failure_threshold": 5,
-        "recovery_timeout_seconds": 60,
-        "half_open_max_calls": 2
+        "recovery_timeout_seconds": 60
+      }
+    },
+
+    "outlook": {
+      "_description": "Outlook (smtp.office365.com:587) default settings - OPTIMIZED for high-volume",
+
+      "max_concurrent_messages": 150,
+      "_max_concurrent_messages_doc": "OPTIMIZED: 150 concurrent messages per account",
+
+      "connection_pool": {
+        "max_connections_per_account": 50,
+        "max_messages_per_connection": 150,
+        "connection_max_age_seconds": 240,
+        "connection_idle_timeout_seconds": 30
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60
+      }
+    },
+
+    "default": {
+      "_description": "Default settings for unknown/custom providers - CONSERVATIVE fallback",
+
+      "max_concurrent_messages": 100,
+
+      "connection_pool": {
+        "max_connections_per_account": 30,
+        "max_messages_per_connection": 100,
+        "connection_max_age_seconds": 300,
+        "connection_idle_timeout_seconds": 60
+      },
+
+      "retry": {
+        "max_attempts": 2,
+        "backoff_factor": 2.0,
+        "max_delay_seconds": 30,
+        "jitter_enabled": true
+      },
+
+      "circuit_breaker": {
+        "enabled": true,
+        "failure_threshold": 5,
+        "recovery_timeout_seconds": 60
       }
     }
-  },
-
-  "_usage_notes": {
-    "1": "This file contains ONLY global settings and provider defaults",
-    "2": "Account credentials (emails, OAuth2 tokens) go in accounts.json (separate file)",
-    "3": "CLI arguments override these settings: --host, --port, --admin-host, --admin-port, --global-concurrency, --dry-run",
-    "4": "Individual accounts can override provider defaults in accounts.json using optional fields",
-    "5": "Send SIGHUP signal (Unix) to hot-reload configuration without restarting: kill -HUP <pid>",
-    "6": "Windows does not support SIGHUP - restart required for config changes",
-    "7": "See docs/DEPLOYMENT_GUIDE.md for production configuration recommendations",
-    "8": "Connections are created on-demand as messages arrive (no pre-warming). Connection pool is lazy-initialized."
   }
 }
