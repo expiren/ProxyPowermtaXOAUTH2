@@ -42,8 +42,8 @@
     }
   },
 
-  "powermt_relay": {
-    "_description": "PowerMtaRelay Go app configuration - handles message receiving and relaying",
+  "powermta_relay": {
+    "_description": "PowerMTA Relay Go app configuration - handles message receiving and relaying",
     "_note": "These settings are read by the PowerMtaRelay Go application, not by the Python proxy",
 
     "max_concurrent_connections_per_account": 3,
