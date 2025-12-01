@@ -42,15 +42,30 @@
     }
   },
 
-  "powermt_relay": {
-    "_description": "PowerMtaRelay Go app configuration - handles message receiving and relaying",
+  "powermta_relay": {
+    "_description": "PowerMTA Relay Go app configuration - handles message receiving and relaying",
     "_note": "These settings are read by the PowerMtaRelay Go application, not by the Python proxy",
 
     "max_concurrent_connections_per_account": 3,
     "_max_concurrent_connections_per_account_doc": "Maximum concurrent SMTP connections per account (default: 3, limits connection overhead)",
 
     "max_workers": 400,
-    "_max_workers_doc": "Maximum worker goroutines for message processing (default: 400, processes up to 400 messages in parallel)"
+    "_max_workers_doc": "Maximum worker goroutines for message processing (default: 400, processes up to 400 messages in parallel)",
+
+    "num_token_fetching_workers": 25,
+    "_num_token_fetching_workers_doc": "Number of concurrent workers for OAuth2 token fetching at startup (default: 25, tune for your system resources)",
+
+    "num_pre_auth_connections_workers": 20,
+    "_num_pre_auth_connections_workers_doc": "Number of concurrent workers for pre-authenticating connections at startup (default: 20, tune for your system resources)",
+
+    "num_token_refresh_workers": 25,
+    "_num_token_refresh_workers_doc": "Number of concurrent workers for token refresh every 59 minutes (default: 25, limits concurrent OAuth2 requests)",
+
+    "num_pool_invalidation_workers": 8,
+    "_num_pool_invalidation_workers_doc": "Number of concurrent workers for invalidating connection pools during token refresh (default: 8, scales with account count)",
+
+    "num_pool_closing_workers": 8,
+    "_num_pool_closing_workers_doc": "Number of concurrent workers for closing connection pools during shutdown (default: 8, faster graceful shutdown)"
   },
 
   "providers": {
