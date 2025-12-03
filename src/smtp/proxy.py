@@ -27,6 +27,7 @@ class SMTPProxyServer:
         self.config_path = config_path
         self.accounts_path = accounts_path
         self.settings = settings
+        self._shutdown_event = None  # Created in start() method when event loop is running
 
         # Load ProxyConfig from config.json (global settings + provider defaults)
         if config_path.exists():
@@ -206,6 +207,9 @@ class SMTPProxyServer:
     async def start(self):
         """Start the SMTP proxy server"""
         try:
+            # Create shutdown event in event loop context
+            self._shutdown_event = asyncio.Event()
+
             # Initialize
             num_accounts = await self.initialize()
 
@@ -216,8 +220,8 @@ class SMTPProxyServer:
             if self.settings.admin_only:
                 logger.info("[SMTPProxyServer] Running in ADMIN-ONLY mode (no SMTP proxy)")
                 logger.info("[SMTPProxyServer] Use admin API to manage accounts")
-                # Keep the admin server running indefinitely
-                await asyncio.Event().wait()
+                # Wait for shutdown signal (set by shutdown() method)
+                await self._shutdown_event.wait()
                 return
 
             logger.info(
@@ -264,6 +268,10 @@ class SMTPProxyServer:
     async def shutdown(self):
         """Shutdown the proxy"""
         logger.info("[SMTPProxyServer] Shutting down...")
+
+        # Signal admin-only mode to exit (if waiting on _shutdown_event)
+        if self._shutdown_event:
+            self._shutdown_event.set()
 
         if self.server:
             self.server.close()

@@ -66,7 +66,7 @@ class Application:
             sys.exit(1)
 
     def _setup_signal_handlers(self):
-        """Setup signal handlers for graceful shutdown"""
+        """Setup signal handlers for graceful shutdown - cross-platform (Windows/Linux/macOS)"""
         loop = asyncio.get_running_loop()
 
         async def shutdown_handler():
@@ -84,18 +84,21 @@ class Application:
             except Exception as e:
                 logger.error(f"Error reloading configuration: {e}", exc_info=True)
 
-        if platform.system() != "Windows":
-            # Unix-like systems
+        if platform.system() == "Windows":
+            # Windows - signal handlers run outside event loop, must use call_soon_threadsafe
+            def windows_shutdown_handler(sig, frame):
+                logger.info(f"Received signal {sig} on Windows - initiating graceful shutdown")
+                loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown_handler()))
+
+            signal.signal(signal.SIGTERM, windows_shutdown_handler)
+            signal.signal(signal.SIGINT, windows_shutdown_handler)
+            logger.debug("[Main] Signal handlers registered for Windows (SIGTERM, SIGINT)")
+        else:
+            # Linux, macOS - signal handlers run inside event loop
             loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(shutdown_handler()))
             loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(shutdown_handler()))
             loop.add_signal_handler(signal.SIGHUP, lambda: asyncio.create_task(reload_handler()))
-        else:
-            # Windows - signal handlers run outside event loop, use call_soon_threadsafe
-            def windows_signal_handler(sig, frame):
-                loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown_handler()))
-
-            signal.signal(signal.SIGTERM, windows_signal_handler)
-            signal.signal(signal.SIGINT, windows_signal_handler)
+            logger.debug("[Main] Signal handlers registered for Unix-like systems (SIGTERM, SIGINT, SIGHUP)")
 
     async def shutdown(self):
         """Shutdown application"""
