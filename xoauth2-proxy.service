@@ -16,9 +16,15 @@ LimitNOFILE=65536
 Restart=always
 RestartSec=10
 
+# Shutdown timeout: 15 seconds for graceful shutdown before SIGKILL
+TimeoutStopSec=15
+
 # Logging
 StandardOutput=append:/var/log/xoauth2/xoauth2_proxy.log
 StandardError=append:/var/log/xoauth2/xoauth2_proxy.log
+
+# Kill any child processes and main process after timeout
+KillMode=mixed
 
 # Security (optional - adjust as needed)
 # PrivateTmp=true

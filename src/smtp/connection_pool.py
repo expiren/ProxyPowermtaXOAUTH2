@@ -571,26 +571,31 @@ class SMTPConnectionPool:
             logger.error(f"[Pool] Error cleaning up {account_email}: {e}")
 
     async def close_all(self):
-        """Close all pooled connections"""
+        """Close all pooled connections (in parallel for faster shutdown)"""
         # Get snapshot of accounts (no lock needed for list() on dict.keys())
         accounts = list(self.locks.keys())
 
-        total_closed = 0
+        # Collect all close tasks
+        close_tasks = []
 
         for account_email in accounts:
             lock = self.locks[account_email]
             async with lock:
                 pool_idle = self.pool_idle[account_email]
 
-                # Close all idle connections
+                # Create close tasks for all connections in this account
                 for pooled in list(pool_idle):  # Copy to avoid modification during iteration
-                    await self._close_connection(pooled)
-                    total_closed += 1
+                    close_tasks.append(self._close_connection(pooled))
 
                 # Clear idle pool
                 pool_idle.clear()
 
-        logger.info(f"[Pool] Closed all {total_closed} connections")
+        # Close all connections in parallel (much faster than sequential)
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
+            logger.info(f"[Pool] Closed all {len(close_tasks)} connections (parallel)")
+        else:
+            logger.info("[Pool] No connections to close")
 
     async def prewarm(self, accounts: list, oauth_manager=None):
         """
